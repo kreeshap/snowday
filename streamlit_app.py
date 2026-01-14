@@ -1,0 +1,37 @@
+import streamlit as st
+from mainapp import get_snow_day_probability
+
+st.set_page_config(page_title="Snow Day Calculator")
+
+st.title("Snow Day Calculator")
+st.write("enter yo zipcode")
+
+zipcode = st.text_input("zip code", max_chars=5, placeholder="48167")
+
+if st.button("calculate", type="primary"):
+    if not zipcode or len(zipcode) != 5 or not zipcode.isdigit():
+        st.error("for the love of god enter a real zip code")
+    else:
+        with st.spinner("cookin up"):
+            result = get_snow_day_probability(zipcode)
+        
+        if result['success']:
+            st.success(f"yo im done cookin up {result['location']}")
+            
+            # Define prob and color HERE before using them
+            prob = result['probability']
+            if prob >= 75:
+                color = "🔴"
+            elif prob >= 55:
+                color = "🟠"
+            elif prob >= 35:
+                color = "🟡"
+            else:
+                color = "🟢"
+            
+            st.markdown(f"## {color} {prob}%")
+            st.markdown(f"### {result['likelihood']}")
+            st.caption(f"last cooked up: {result['timestamp']}")
+            
+        else:
+            st.error(f"Error: {result['error']}")
