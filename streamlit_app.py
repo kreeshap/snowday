@@ -13,7 +13,7 @@ if st.button("calculate", type="primary"):
         st.error("for the love of god enter a real zip code")
     else:
         with st.spinner("cookin up"):
-            result = get_snow_day_probability(zipcode)
+            result = get_snow_day_probabilities(zipcode)
         
         if result['success']:
             st.success(f"yo im done cookin up {result['location']}")
@@ -29,9 +29,13 @@ if st.button("calculate", type="primary"):
             else:
                 color = "🟢"
             
-            st.markdown(f"## {color} {prob}%")
-            st.markdown(f"### {result['likelihood']}")
+            s   for day in result['probabilities']:
+                st.markdown(f"### {day['weekday']} ({day['date']})")
+                st.markdown(f"**Probability:** {day['probability']}%")
+                st.markdown(f"**Likelihood:** {day['likelihood']}")
+                
             st.caption(f"last cooked up: {result['timestamp']}")
             
         else:
             st.error(f"Error: {result['error']}")
+
