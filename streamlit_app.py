@@ -16,26 +16,27 @@ if st.button("calculate", type="primary"):
             result = get_snow_day_probabilities(zipcode)
         
         if result['success']:
-            st.success(f"yo im done cookin up {result['location']}")
-            
-            # Define prob and color HERE before using them
-            prob = result['probability']
-            if prob >= 75:
-                color = "🔴"
-            elif prob >= 55:
-                color = "🟠"
-            elif prob >= 35:
-                color = "🟡"
-            else:
-                color = "🟢"
-            
-            s   for day in result['probabilities']:
-                st.markdown(f"### {day['weekday']} ({day['date']})")
-                st.markdown(f"**Probability:** {day['probability']}%")
-                st.markdown(f"**Likelihood:** {day['likelihood']}")
-                
-            st.caption(f"last cooked up: {result['timestamp']}")
+    st.success(f"yo im done cookin up {result['location']}")
+    
+    # Define prob and color HERE before using them
+    prob = result['probability']
+    if prob >= 75:
+        color = "🔴"
+    elif prob >= 55:
+        color = "🟠"
+    elif prob >= 35:
+        color = "🟡"
+    else:
+        color = "🟢"
+    
+    for day in result['probabilities']:  # <-- fixed this line
+        st.markdown(f"### {day['weekday']} ({day['date']})")
+        st.markdown(f"**Probability:** {day['probability']}%")
+        st.markdown(f"**Likelihood:** {day['likelihood']}")
+        
+    st.caption(f"last cooked up: {result['timestamp']}")
             
         else:
             st.error(f"Error: {result['error']}")
+
 
