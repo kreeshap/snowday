@@ -21,16 +21,13 @@ if st.button("calculate", type="primary"):
             # Loop through each day and assign color individually
             for day in result['probabilities']:
                 prob = day['probability']
-                if prob >= 75:
-                elif prob >= 55:
-                elif prob >= 35:
-                else:
                 
-                st.markdown(f"### {color} {day['weekday']} ({day['date']})")
+                st.markdown(f"### {day['weekday']} ({day['date']})")
                 st.markdown(f"**Probability:** {day['probability']}%")
                 st.markdown(f"**Likelihood:** {day['likelihood']}")
             
             st.caption(f"last cooked up: {result['timestamp']}")
         else:
             st.error(f"Error: {result['error']}")
+
 
