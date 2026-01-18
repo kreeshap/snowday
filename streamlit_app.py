@@ -22,13 +22,9 @@ if st.button("calculate", type="primary"):
             for day in result['probabilities']:
                 prob = day['probability']
                 if prob >= 75:
-                    color = "🔴"
                 elif prob >= 55:
-                    color = "🟠"
                 elif prob >= 35:
-                    color = "🟡"
                 else:
-                    color = "🟢"
                 
                 st.markdown(f"### {color} {day['weekday']} ({day['date']})")
                 st.markdown(f"**Probability:** {day['probability']}%")
@@ -37,3 +33,4 @@ if st.button("calculate", type="primary"):
             st.caption(f"last cooked up: {result['timestamp']}")
         else:
             st.error(f"Error: {result['error']}")
+
