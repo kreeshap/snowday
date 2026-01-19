@@ -2,11 +2,11 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-class SnowDayCalculator:
+class ImprovedSnowDayCalculator:
     """
-    Fixed Snow Day Calculator using NWS Gridpoint Data.
-    Calculates probabilities for the next four weekdays, skipping weekends.
-    Properly aligns hourly forecast data for accurate scoring.
+    Enhanced Snow Day Calculator using NWS Gridpoint Data.
+    Focuses on timing and accumulation rate as primary factors.
+    More conservative probability estimates based on actual school closure patterns.
     """
     
     def __init__(self, zipcode: str):
@@ -16,7 +16,7 @@ class SnowDayCalculator:
         self.location_name = None
         self.base_url = "https://api.weather.gov"
         self.headers = {
-            'User-Agent': '(SnowDayCalculator, contact@example.com)',
+            'User-Agent': '(ImprovedSnowDayCalculator, contact@example.com)',
             'Accept': 'application/json'
         }
         self.hourly_forecast = None
@@ -66,11 +66,9 @@ class SnowDayCalculator:
             if not metadata:
                 return False
             
-            # URLs
             hourly_url = metadata['forecastHourly']
             alerts_url = f"{self.base_url}/alerts/active?point={self.lat},{self.lon}"
             
-            # Hourly forecast - this has all the data we need
             hourly_response = requests.get(hourly_url, headers=self.headers, timeout=15)
             if hourly_response.status_code == 200:
                 self.hourly_forecast = hourly_response.json()['properties']['periods']
@@ -78,7 +76,6 @@ class SnowDayCalculator:
                 self.error_message = "Failed to fetch hourly forecast"
                 return False
             
-            # Alerts
             alerts_response = requests.get(alerts_url, headers=self.headers, timeout=15)
             if alerts_response.status_code == 200:
                 self.alerts = alerts_response.json()['features']
@@ -89,217 +86,196 @@ class SnowDayCalculator:
             return False
 
     # -------------------------
-    # Analysis functions
+    # Analysis functions (rewritten for timing priority)
     # -------------------------
 
-    def analyze_snowfall(self, day_hours: List[Dict]) -> float:
-        """Score based on snow in forecast descriptions."""
-        score = 0.0
-        if not day_hours:
-            return 0.0
-        
-        snow_hours = 0
-        heavy_snow_hours = 0
+    def calculate_accumulation_rate(self, day_hours: List[Dict]) -> Dict:
+        """
+        Calculate snowfall accumulation rate - the CRITICAL factor.
+        Returns accumulation by 3-hour windows and identifies peak rate periods.
+        """
+        accumulation_windows = {}
         
         for period in day_hours:
+            dt = datetime.fromisoformat(period['startTime'])
             desc = period.get('shortForecast', '').lower()
             detailed = period.get('detailedForecast', '').lower()
             
-            # Check for snow mentions
-            if 'snow' in desc or 'snow' in detailed:
-                snow_hours += 1
-                if 'heavy' in detailed or 'significant' in detailed:
-                    heavy_snow_hours += 1
+            # Check if snow is happening
+            has_snow = 'snow' in desc or 'snow' in detailed
+            if not has_snow:
+                continue
+            
+            # Estimate accumulation (rough: extract from detailed forecast if possible)
+            # NWS doesn't always provide accumulation, so infer from description
+            accumulation = self._estimate_accumulation(detailed)
+            
+            # Group by 3-hour window
+            window_key = (dt.hour // 3) * 3
+            if window_key not in accumulation_windows:
+                accumulation_windows[window_key] = 0
+            accumulation_windows[window_key] += accumulation
         
-        # Score based on duration and intensity
-        if heavy_snow_hours >= 6:
-            score += 30
-        elif heavy_snow_hours >= 3:
-            score += 20
-        elif heavy_snow_hours >= 1:
-            score += 10
-        
-        if snow_hours >= 12:
-            score += 20
-        elif snow_hours >= 8:
-            score += 12
-        elif snow_hours >= 4:
-            score += 6
-        
-        return score
+        return accumulation_windows
     
-    def analyze_temperature(self, day_hours: List[Dict]) -> float:
-        """Score based on morning, overnight, and wind chill temperatures."""
-        score = 0.0
-        if not day_hours:
-            return 0.0
+    def _estimate_accumulation(self, forecast_text: str) -> float:
+        """Estimate snowfall accumulation from text description."""
+        # Look for specific amounts first
+        if 'trace' in forecast_text:
+            return 0.1
+        if '1 to 2' in forecast_text or '1-2' in forecast_text:
+            return 1.5
+        if '2 to 4' in forecast_text or '2-4' in forecast_text:
+            return 3.0
+        if '3 to 6' in forecast_text or '3-6' in forecast_text:
+            return 4.5
+        if '6 to 8' in forecast_text or '6-8' in forecast_text:
+            return 7.0
+        if '8 to 12' in forecast_text or '8-12' in forecast_text:
+            return 10.0
+        if '12 to 16' in forecast_text or '12-16' in forecast_text:
+            return 14.0
         
-        morning_temps = []
-        overnight_temps = []
-        wind_chills = []
+        # Generic snow language fallback
+        if 'heavy snow' in forecast_text or 'significant snow' in forecast_text:
+            return 0.5
+        if 'snow' in forecast_text:
+            return 0.25
+        
+        return 0.0
+    
+    def analyze_early_morning_timing(self, day_hours: List[Dict]) -> float:
+        """
+        Heavy emphasis on snow falling during critical morning hours (4am-8am).
+        This is THE most important factor for school closure decisions.
+        """
+        score = 0.0
         
         for period in day_hours:
             dt = datetime.fromisoformat(period['startTime'])
             hour = dt.hour
-            temp = period['temperature']
+            desc = period.get('shortForecast', '').lower()
+            detailed = period.get('detailedForecast', '').lower()
             
-            # NWS returns wind chill in Fahrenheit directly (no conversion needed)
-            wind_chill = period.get('windChill')
+            has_snow = 'snow' in desc or 'snow' in detailed
+            if not has_snow:
+                continue
             
-            # Categorize by time of day
-            if 0 <= hour <= 6:
-                overnight_temps.append(temp)
-            if 6 <= hour <= 9:
-                morning_temps.append(temp)
-            if wind_chill is not None:
-                wind_chills.append(wind_chill)
-        
-        # Morning temperature scoring
-        if morning_temps:
-            avg_morning = sum(morning_temps) / len(morning_temps)
-            if avg_morning < 0:
-                score += 20
-            elif avg_morning < 10:
-                score += 15
-            elif avg_morning < 20:
-                score += 8
-            elif avg_morning < 32:
-                score += 3
-        
-        # Overnight temperature scoring
-        if overnight_temps:
-            min_overnight = min(overnight_temps)
-            if min_overnight < -10:
-                score += 12
-            elif min_overnight < 0:
-                score += 8
-            elif min_overnight < 15:
-                score += 4
-        
-        # Wind chill scoring
-        if wind_chills:
-            min_wc = min(wind_chills)
-            if min_wc < -20:
-                score += 15
-            elif min_wc < -10:
-                score += 10
-            elif min_wc < 0:
-                score += 5
+            # Critical window: 4am-8am (peak impact on morning commute)
+            if 4 <= hour <= 8:
+                accumulation = self._estimate_accumulation(detailed)
+                # High weight: even small amounts matter here
+                if accumulation >= 3:
+                    score += 40
+                elif accumulation >= 1:
+                    score += 25
+                else:
+                    score += 10
+            
+            # Secondary window: 2am-4am (still impacts early commute)
+            elif 2 <= hour < 4:
+                accumulation = self._estimate_accumulation(detailed)
+                if accumulation >= 2:
+                    score += 20
+                elif accumulation >= 1:
+                    score += 12
+            
+            # Late night (10pm-2am): accumulates but less critical
+            elif 22 <= hour or hour <= 2:
+                accumulation = self._estimate_accumulation(detailed)
+                if accumulation >= 4:
+                    score += 8
         
         return score
     
-    def analyze_wind(self, day_hours: List[Dict]) -> float:
-        """Score based on wind speed and gusts."""
-        score = 0.0
-        if not day_hours:
-            return 0.0
-        
-        wind_speeds = []
-        wind_gusts = []
-        high_wind_hours = 0
+    def analyze_total_accumulation(self, day_hours: List[Dict]) -> float:
+        """Score based on total daily snowfall amount."""
+        total_accumulation = 0.0
         
         for period in day_hours:
-            wind_speed = period.get('windSpeed')
-            wind_gust = period.get('windGust')
-            
-            if wind_speed:
-                # windSpeed is a string like "10 mph", extract number
-                speed_val = self._extract_number(wind_speed)
-                if speed_val:
-                    wind_speeds.append(speed_val)
-                    if speed_val > 20:
-                        high_wind_hours += 1
-            
-            if wind_gust:
-                gust_val = self._extract_number(wind_gust)
-                if gust_val:
-                    wind_gusts.append(gust_val)
+            detailed = period.get('detailedForecast', '').lower()
+            total_accumulation += self._estimate_accumulation(detailed)
         
-        if not wind_speeds:
+        score = 0.0
+        
+        # Thresholds based on typical closure criteria
+        if total_accumulation >= 12:
+            score += 35
+        elif total_accumulation >= 8:
+            score += 28
+        elif total_accumulation >= 6:
+            score += 20
+        elif total_accumulation >= 4:
+            score += 12
+        elif total_accumulation >= 2:
+            score += 5
+        
+        return score
+    
+    def analyze_road_conditions(self, day_hours: List[Dict]) -> float:
+        """
+        Score based on temperature and visibility affecting road safety.
+        Roads with cold temps stay snow-covered; warm temps allow melting/treatment.
+        """
+        score = 0.0
+        temps = []
+        visibilities = []
+        
+        for period in day_hours:
+            dt = datetime.fromisoformat(period['startTime'])
+            
+            # Focus on daytime hours when roads matter most
+            if 6 <= dt.hour <= 18:
+                temps.append(period['temperature'])
+                vis_str = period.get('visibility', '')
+                vis_val = self._extract_number(vis_str)
+                if vis_val:
+                    visibilities.append(vis_val)
+        
+        if not temps:
             return 0.0
         
-        max_wind = max(wind_speeds)
-        max_gust = max(wind_gusts) if wind_gusts else 0
+        avg_temp = sum(temps) / len(temps)
+        min_temp = min(temps)
         
-        # Wind speed scoring
-        if max_wind >= 35:
-            score += 25
-        elif max_wind >= 30:
-            score += 18
-        elif max_wind >= 25:
-            score += 12
-        elif max_wind >= 20:
-            score += 6
-        
-        # Gust scoring
-        if max_gust >= 50:
-            score += 12
-        elif max_gust >= 40:
+        # Very cold temps (roads won't treat/clear effectively)
+        if avg_temp < 15:
+            score += 15
+        elif avg_temp < 25:
             score += 8
-        elif max_gust >= 35:
+        elif avg_temp < 32:
             score += 4
         
-        # Sustained high wind scoring
-        if high_wind_hours >= 6:
+        # Freeze risk (below 32)
+        if min_temp < 32:
             score += 5
+        
+        # Poor visibility
+        if visibilities:
+            min_vis = min(visibilities)
+            if min_vis < 0.5:
+                score += 12
+            elif min_vis < 1.0:
+                score += 6
         
         return score
     
-    def analyze_visibility(self, day_hours: List[Dict]) -> float:
-        """Score based on visibility conditions."""
+    def analyze_hazardous_precip(self, day_hours: List[Dict]) -> float:
+        """Score for freezing rain, sleet, and ice - these guarantee closures."""
         score = 0.0
-        if not day_hours:
-            return 0.0
-        
-        visibilities = []
-        poor_vis_hours = 0
-        
-        for period in day_hours:
-            # Visibility is a string like "10 mi", extract number
-            vis_str = period.get('visibility', '')
-            vis_val = self._extract_number(vis_str)
-            if vis_val:
-                visibilities.append(vis_val)
-                if vis_val < 0.5:
-                    poor_vis_hours += 1
-        
-        if not visibilities:
-            return 0.0
-        
-        min_vis = min(visibilities)
-        
-        # Visibility scoring
-        if min_vis < 0.25:
-            score += 20
-        elif min_vis < 0.5:
-            score += 15
-        elif min_vis < 1.0:
-            score += 10
-        elif min_vis < 2.0:
-            score += 5
-        
-        # Poor visibility hours
-        if poor_vis_hours >= 4:
-            score += 8
-        
-        return score
-    
-    def analyze_precipitation_type(self, day_hours: List[Dict]) -> float:
-        """Score based on freezing rain, sleet, and other hazardous precip."""
-        score = 0.0
-        if not day_hours:
-            return 0.0
         
         for period in day_hours:
             desc = period.get('shortForecast', '').lower()
             detailed = period.get('detailedForecast', '').lower()
             
             if 'freezing rain' in detailed or 'freezing rain' in desc:
-                score += 35
+                score += 50  # Nearly always causes closure
+            elif 'ice storm' in detailed:
+                score += 45
             elif 'sleet' in detailed or 'ice pellets' in detailed:
-                score += 20
+                score += 30
             elif 'freezing drizzle' in detailed:
-                score += 15
+                score += 20
         
         return score
     
@@ -312,65 +288,37 @@ class SnowDayCalculator:
         for alert in self.alerts:
             event = alert['properties'].get('event', '')
             if 'Blizzard Warning' in event:
-                score += 40
+                score += 50
             elif 'Ice Storm Warning' in event:
-                score += 38
+                score += 48
             elif 'Winter Storm Warning' in event:
-                score += 30
+                score += 35
             elif 'Wind Chill Warning' in event:
-                score += 20
+                score += 15
             elif 'Winter Weather Advisory' in event:
-                score += 12
+                score += 18
             elif 'Wind Chill Advisory' in event:
                 score += 8
         
-        return min(score, 40.0)
+        return min(score, 50.0)
     
-    def analyze_timing(self, day_hours: List[Dict]) -> float:
-        """Bonus points if snow occurs during peak impact times."""
+    def analyze_wind_impact(self, day_hours: List[Dict]) -> float:
+        """Score based on wind affecting visibility and wind chill."""
         score = 0.0
-        if not day_hours:
-            return 0.0
+        high_wind_hours = 0
         
         for period in day_hours:
-            dt = datetime.fromisoformat(period['startTime'])
-            hour = dt.hour
-            desc = period.get('shortForecast', '').lower()
+            wind_speed = period.get('windSpeed')
             
-            # Morning commute (5-9am)
-            if 5 <= hour <= 9 and 'snow' in desc:
-                score += 8
-            
-            # Overnight accumulation (10pm-4am)
-            if hour >= 22 or hour <= 4:
-                if 'snow' in desc or 'blizzard' in desc:
-                    score += 5
+            if wind_speed:
+                speed_val = self._extract_number(wind_speed)
+                if speed_val and speed_val > 25:
+                    high_wind_hours += 1
         
-        return score
-    
-    def analyze_road_conditions(self, day_hours: List[Dict]) -> float:
-        """Score based on freeze/thaw cycles and road impact."""
-        score = 0.0
-        if not day_hours:
-            return 0.0
-        
-        temps = [p['temperature'] for p in day_hours[:12]]
-        if not temps:
-            return 0.0
-        
-        avg_temp = sum(temps) / len(temps)
-        
-        # Consistently cold temps
-        if avg_temp < 10:
+        if high_wind_hours >= 6:
+            score += 15
+        elif high_wind_hours >= 3:
             score += 8
-        elif avg_temp < 15:
-            score += 5
-        
-        # Freeze/thaw cycle (most dangerous)
-        temps_above = sum(1 for t in temps if t > 32)
-        temps_below = sum(1 for t in temps if t <= 32)
-        if temps_above > 0 and temps_below > 0:
-            score += 6
         
         return score
     
@@ -383,7 +331,7 @@ class SnowDayCalculator:
             return None
 
     # -------------------------
-    # Main per-day calculation
+    # Main calculation
     # -------------------------
     
     def calculate_next_weekday_probabilities(self) -> Dict:
@@ -417,49 +365,45 @@ class SnowDayCalculator:
         
         # Calculate for each future weekday
         for day_date in sorted(periods_by_date.keys()):
-            weekday_num = day_date.weekday()  # 0=Mon, 4=Fri, 5=Sat, 6=Sun
+            weekday_num = day_date.weekday()
             
-            # Skip past days and weekends
             if day_date <= today or weekday_num >= 5:
                 continue
             
             day_hours = periods_by_date[day_date]
             
-            # Calculate component scores
-            snowfall_score = self.analyze_snowfall(day_hours)
-            temp_score = self.analyze_temperature(day_hours)
-            wind_score = self.analyze_wind(day_hours)
-            visibility_score = self.analyze_visibility(day_hours)
-            precip_score = self.analyze_precipitation_type(day_hours)
-            alerts_score = self.analyze_alerts()
-            timing_score = self.analyze_timing(day_hours)
+            # Prioritize timing and accumulation
+            early_morning_score = self.analyze_early_morning_timing(day_hours)
+            accumulation_score = self.analyze_total_accumulation(day_hours)
+            hazard_precip_score = self.analyze_hazardous_precip(day_hours)
             road_score = self.analyze_road_conditions(day_hours)
+            alerts_score = self.analyze_alerts()
+            wind_score = self.analyze_wind_impact(day_hours)
             
+            # Weighted total - timing and accumulation dominate
             total_score = (
-                snowfall_score +
-                temp_score +
-                wind_score +
-                visibility_score +
-                precip_score +
+                (early_morning_score * 2.0) +  # Double weight on critical timing
+                (accumulation_score * 1.5) +   # Heavy weight on total snow
+                (hazard_precip_score * 1.8) +  # High weight on ice/freezing rain
+                (road_score * 1.0) +
                 alerts_score +
-                timing_score +
-                road_score
+                wind_score
             )
             
-            # Convert score to probability using logistic function
-            # Max theoretical score: 30+20+25+20+35+40+8+8 = 186
-            # Calibrated so 50 points = ~50% probability
-            probability = (100 / (1 + (2.7183 ** (-0.05 * (total_score - 50)))))
+            # More conservative probability function
+            # Calibrated so ~80 points = 50% probability
+            # Max theoretical: (40*2) + (35*1.5) + (50*1.8) + (15) + (50) + (15) = ~250
+            probability = (100 / (1 + (2.7183 ** (-0.03 * (total_score - 80)))))
             probability = max(1, min(99, int(probability)))
             
             # Likelihood label
-            if probability < 15:
+            if probability < 10:
                 likelihood = "VERY UNLIKELY"
-            elif probability < 35:
+            elif probability < 25:
                 likelihood = "UNLIKELY"
-            elif probability < 55:
+            elif probability < 50:
                 likelihood = "POSSIBLE"
-            elif probability < 75:
+            elif probability < 70:
                 likelihood = "LIKELY"
             else:
                 likelihood = "VERY LIKELY"
@@ -470,16 +414,15 @@ class SnowDayCalculator:
                 'probability': probability,
                 'likelihood': likelihood,
                 'score_breakdown': {
-                    'snowfall': snowfall_score,
-                    'temperature': temp_score,
-                    'wind': wind_score,
-                    'visibility': visibility_score,
-                    'precipitation_type': precip_score,
-                    'alerts': alerts_score,
-                    'timing': timing_score,
-                    'road_conditions': road_score,
-                    'total': total_score
-                }
+                    'early_morning_timing': round(early_morning_score, 1),
+                    'total_accumulation': round(accumulation_score, 1),
+                    'hazardous_precip': round(hazard_precip_score, 1),
+                    'road_conditions': round(road_score, 1),
+                    'alerts': round(alerts_score, 1),
+                    'wind': round(wind_score, 1),
+                    'total': round(total_score, 1)
+                },
+                'note': 'This is an estimate. Always check official school district announcements.'
             })
             
             counted_days += 1
@@ -491,11 +434,12 @@ class SnowDayCalculator:
             'location': self.location_name,
             'zipcode': self.zipcode,
             'probabilities': results,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %I:%M %p')
+            'timestamp': datetime.now().strftime('%Y-%m-%d %I:%M %p'),
+            'disclaimer': 'This calculator provides estimates based on weather data. School closure decisions are made by district superintendents considering multiple factors including road conditions, equipment availability, and county coordination. Always rely on official district announcements.'
         }
 
 
 def get_snow_day_probabilities(zipcode: str) -> Dict:
     """Convenience function to get snow day probabilities."""
-    calculator = SnowDayCalculator(zipcode)
+    calculator = ImprovedSnowDayCalculator(zipcode)
     return calculator.calculate_next_weekday_probabilities()
