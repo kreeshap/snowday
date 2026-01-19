@@ -34,6 +34,11 @@ class ImprovedSnowDayCalculator:
             'accumulation_threshold': 6.0,
             'timing_weight': 1.8,
             'name': 'Rural/Tough (tolerates more snow)'
+        },
+        'northville': {
+            'accumulation_threshold': 3.5,  # Closes on 3-6" snow + icy roads (Jan 15, 2026)
+            'timing_weight': 2.3,
+            'name': 'Northville Public Schools (Actual)'
         }
     }
     
@@ -345,6 +350,7 @@ class ImprovedSnowDayCalculator:
     def analyze_total_accumulation(self, day_hours: List[Dict]) -> Tuple[float, float]:
         """
         Total snow depth using period-specific temperatures.
+        Northville closed on 3-6" (Jan 15, 2026) and closed on cold days.
         Returns (score, total_snow_inches)
         """
         total_snow = 0.0
@@ -360,18 +366,23 @@ class ImprovedSnowDayCalculator:
                 total_snow += snow_depth
         
         score = 0.0
-        threshold = self.profile['accumulation_threshold']
+        threshold = self.profile['accumulation_threshold']  # 3.5" for Northville
         
-        if total_snow >= threshold + 4:
-            score = 40
-        elif total_snow >= threshold + 2:
-            score = 30
-        elif total_snow >= threshold:
-            score = 18
-        elif total_snow >= threshold - 1:
-            score = 8
+        # Northville thresholds based on actual closures
+        if total_snow >= 6.0:
+            score = 45  # Definitely closes
+        elif total_snow >= 5.0:
+            score = 40  # Very likely (Jan 15 was ~5-6")
+        elif total_snow >= 4.0:
+            score = 35  # Likely
+        elif total_snow >= threshold:  # 3.5"
+            score = 25  # Probable (Jan 15 was 3-6")
+        elif total_snow >= 2.5:
+            score = 15  # Possible
+        elif total_snow >= 1.0:
+            score = 5   # Unlikely but possible with bad timing
         elif total_snow >= 0.5:
-            score = 2
+            score = 2   # Very unlikely
         
         return score, total_snow
     
@@ -595,10 +606,9 @@ class ImprovedSnowDayCalculator:
     def analyze_extreme_cold_day(self, day_hours: List[Dict], min_bus_chill: float) -> float:
         """
         Score for pure extreme cold closures (no snow/ice).
-        Only applies when wind chill is dangerously low during bus hours.
-        Capped so it doesn't overwhelm snow/ice events.
+        Northville specifically uses -19 to -22°F windchill threshold for closure.
         
-        Returns score (max 25 points)
+        Returns score (max 40 points for pure cold day)
         """
         has_snow_or_ice = any(self._is_snow_period(p) for p in day_hours)
         
@@ -606,17 +616,21 @@ class ImprovedSnowDayCalculator:
         if has_snow_or_ice:
             return 0.0
         
-        # Pure cold closure only if bus-time wind chill is dangerously low
+        # Northville closure criteria: -19 to -22°F wind chill = closure
         score = 0.0
         
         if min_bus_chill <= -25:
-            score = 22
+            score = 40  # Extremely dangerous
+        elif min_bus_chill <= -22:
+            score = 38  # Near certain closure
         elif min_bus_chill <= -20:
-            score = 15
+            score = 32  # Likely closure
+        elif min_bus_chill <= -18:
+            score = 25  # Probable closure
         elif min_bus_chill <= -15:
-            score = 8
+            score = 15  # Possible closure
         
-        return min(score, 25.0)
+        return min(score, 40.0)
     
     def _calculate_severity_score(self, day_hours: List[Dict]) -> Dict:
         """
@@ -637,14 +651,19 @@ class ImprovedSnowDayCalculator:
         min_bus_chill = self._compute_min_bus_chill(day_hours)
         extreme_cold_score = self.analyze_extreme_cold_day(day_hours, min_bus_chill)
         
-        # Windchill danger score: applies alongside other factors
+        # Windchill danger score: SIGNIFICANT weight for dangerous conditions
+        # Schools close for extreme cold even without precipitation
         windchill_danger_score = 0.0
         if min_bus_chill <= -25:
-            windchill_danger_score = 12.0
+            windchill_danger_score = 35.0  # Very dangerous
         elif min_bus_chill <= -20:
-            windchill_danger_score = 8.0
+            windchill_danger_score = 25.0  # Dangerous
         elif min_bus_chill <= -15:
-            windchill_danger_score = 4.0
+            windchill_danger_score = 18.0  # Hazardous
+        elif min_bus_chill <= -10:
+            windchill_danger_score = 12.0  # Risky
+        elif min_bus_chill <= -5:
+            windchill_danger_score = 6.0   # Concerning
         
         # ===== ALERTS =====
         alert_type, alert_score = self.analyze_alerts(day_hours)
@@ -682,9 +701,13 @@ class ImprovedSnowDayCalculator:
     def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[int, float]:
         """
         Convert severity score to probability with confidence interval.
+        Calibrated specifically for Northville Public Schools.
+        
+        Historical closures:
+        - Jan 15, 2026: 3-6" snow + icy roads + Arctic air
+        - Jan 21-22, 2025: -19 to -22°F wind chill (no snow)
         
         Returns (probability, confidence)
-        Confidence decreases for borderline cases and distant forecasts.
         """
         # Alert overrides set floors
         if alert_type == 'Blizzard Warning':
@@ -692,26 +715,45 @@ class ImprovedSnowDayCalculator:
         elif alert_type == 'Ice Storm Warning':
             return 80, 0.93
         elif alert_type == 'Winter Storm Warning':
-            return 65, 0.85
+            return 70, 0.88
         elif alert_type == 'Winter Weather Advisory':
-            return 40, 0.70
+            return 45, 0.75
         
-        # Severity buckets with inherent uncertainty
-        if severity_score < 20:
-            probability = 5
-            confidence = 0.92
-        elif severity_score < 40:
+        # Severity buckets calibrated for Northville
+        # Low: 0-20 (no weather)
+        # Low-Med: 20-35 (light snow or cold)
+        # Medium: 35-55 (moderate snow or borderline cold)
+        # Med-High: 55-75 (significant snow or dangerous cold)
+        # High: 75-90 (heavy snow or extreme cold)
+        # Very High: 90+ (blizzard conditions)
+        
+        if severity_score < 10:
+            probability = 2
+            confidence = 0.95
+        elif severity_score < 20:
+            probability = 8
+            confidence = 0.90
+        elif severity_score < 30:
             probability = 15
             confidence = 0.85
-        elif severity_score < 60:
-            probability = 35
-            confidence = 0.75
-        elif severity_score < 80:
-            probability = 60
+        elif severity_score < 40:
+            probability = 28
+            confidence = 0.82
+        elif severity_score < 50:
+            probability = 42
             confidence = 0.80
-        elif severity_score < 100:
-            probability = 75
+        elif severity_score < 60:
+            probability = 55
+            confidence = 0.80
+        elif severity_score < 70:
+            probability = 68
+            confidence = 0.82
+        elif severity_score < 80:
+            probability = 76
             confidence = 0.85
+        elif severity_score < 90:
+            probability = 82
+            confidence = 0.87
         else:
             probability = 88
             confidence = 0.90
