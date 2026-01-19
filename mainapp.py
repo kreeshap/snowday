@@ -1,53 +1,8 @@
-def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
-        """
-        Compute minimum wind chill during bus commute hours (6am-9am).
-        Uses actual NWS wind chill if available, calculates from temp+wind otherwise.
-        
-        Returns the minimum wind chill value (or 32 if no data available).
-        """
-        bus_hour_chills = []
-        
-        for period in day_hours:
-            dt = datetime.fromisoformat(period['startTime'])
-            
-            # Bus commute window: 6am-9am
-            if 6 <= dt.hour <= 9:
-                chill = self._extract_wind_chill(period)
-                if chill is not None:
-                    bus_hour_chills.append(chill)
-        
-        return min(bus_hour_chills) if bus_hour_chills else 32.0
-    
-    def analyze_extreme_cold_day(self, day_hours: List[Dict], min_bus_chill: float) -> float:
-        """
-        Score for pure extreme cold closures (no snow/ice).
-        Only applies when wind chill is dangerously low during bus hours.
-        Capped so it doesn't overwhelm snow/ice events.
-        
-        Returns score (max 25 points)
-        """
-        has_snow_or_ice = any(self._is_snow_period(p) for p in day_hours)
-        
-        # Only apply if there's NO snow/ice
-        # (Wind chill danger is already scored separately if snow present)
-        if has_snow_or_ice:
-            return 0.0
-        
-        # Pure cold closure only if bus-time wind chill is dangerously low
-        score = 0.0
-        
-        if min_bus_chill <= -25:
-            score = 22  # Standalone extreme cold closure
-        elif min_bus_chill <= -20:
-            score = 15
-        elif min_bus_chill <= -15:
-            score = 8
-        
-        # Cap at 25 so pure cold never dominates snow/ice events
-        return min(score, 25.0)import requests
+import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import re
+import math
 
 class ImprovedSnowDayCalculator:
     """
@@ -238,6 +193,15 @@ class ImprovedSnowDayCalculator:
                 return val
         return None
     
+    def _extract_wind_speed(self, period: Dict) -> Optional[float]:
+        """Extract wind speed in mph."""
+        wind = period.get('windSpeed')
+        if wind:
+            val = self._extract_number(wind)
+            if val:
+                return val
+        return None
+    
     def _get_temperature_fahrenheit(self, period: Dict) -> Optional[float]:
         """
         Extract temperature in Fahrenheit.
@@ -278,7 +242,6 @@ class ImprovedSnowDayCalculator:
             return temp
         
         # Calculate using NWS formula
-        import math
         v_power = math.pow(wind_speed, 0.16)
         wind_chill = 35.74 + (0.6215 * temp) - (35.75 * v_power) + (0.4275 * temp * v_power)
         
@@ -714,11 +677,6 @@ class ImprovedSnowDayCalculator:
             'road_conditions': round(road_score, 1),
             'timing_details': timing_details,
             'has_refreeze': has_refreeze,
-        } round(hazard_score, 1),
-            'drifting_risk': round(drifting_score, 1),
-            'road_conditions': round(road_score, 1),
-            'timing_details': timing_details,
-            'has_refreeze': has_refreeze,
         }
     
     def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[int, float]:
@@ -739,7 +697,6 @@ class ImprovedSnowDayCalculator:
             return 40, 0.70
         
         # Severity buckets with inherent uncertainty
-        # Buckets calibrated to real closure patterns
         if severity_score < 20:
             probability = 5
             confidence = 0.92
@@ -748,7 +705,7 @@ class ImprovedSnowDayCalculator:
             confidence = 0.85
         elif severity_score < 60:
             probability = 35
-            confidence = 0.75  # Borderline cases are fuzzy
+            confidence = 0.75
         elif severity_score < 80:
             probability = 60
             confidence = 0.80
@@ -924,14 +881,6 @@ def get_snow_day_probabilities(zipcode: str, district_profile: str = 'average') 
 class SnowDayValidator:
     """
     Framework for validating predictions against actual school closures.
-    
-    Usage:
-        validator = SnowDayValidator()
-        validator.add_prediction(date='2025-01-15', predicted_prob=65, actual_closed=True)
-        validator.add_prediction(date='2025-01-16', predicted_prob=25, actual_closed=False)
-        stats = validator.get_stats()
-        print(f"Accuracy: {stats['accuracy']:.1%}")
-        print(f"ROC AUC: {stats['roc_auc']:.3f}")
     """
     
     def __init__(self):
