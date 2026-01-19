@@ -597,50 +597,37 @@ class ImprovedSnowDayCalculator:
             'has_refreeze': has_refreeze,
         }
     
-    def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[int, float]:
-        """Convert severity score to probability, with better cold-only handling."""
+    def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[float, float]:
+        """Convert severity score to probability, smooth mapping without rounding."""
         if alert_type == 'Blizzard Warning':
-            return 88, 0.95
+            return 88.0, 0.95
         elif alert_type == 'Ice Storm Warning':
-            return 85, 0.93
+            return 85.0, 0.93
         elif alert_type == 'Winter Storm Warning':
-            return 72, 0.88
+            return 72.0, 0.88
         elif alert_type == 'Winter Weather Advisory':
-            return 48, 0.75
+            return 48.0, 0.75
 
-        # Boost cold-only days: brutal wind chill should be 60-75% closure probability
-        if severity_score > 0 and severity_score < 50:
-            probability = 60 + int(severity_score / 2)  # 60–85% range
-            confidence = 0.85
-        elif severity_score < 10:
-            probability = 2
+        # Smooth probability curve based on severity score
+        # Cold-only days (0-50): 60-85% range
+        # Mixed/snow days (50-100): 70-95% range
+        if severity_score <= 0:
+            probability = 2.0
             confidence = 0.95
-        elif severity_score < 20:
-            probability = 10
-            confidence = 0.92
-        elif severity_score < 30:
-            probability = 25
-            confidence = 0.88
-        elif severity_score < 40:
-            probability = 40
-            confidence = 0.85
         elif severity_score < 50:
-            probability = 55
-            confidence = 0.82
-        elif severity_score < 60:
-            probability = 70
-            confidence = 0.82
-        elif severity_score < 70:
-            probability = 76
-            confidence = 0.83
-        elif severity_score < 80:
-            probability = 82
+            # Linear boost for cold/light snow: 60 + (score/2)
+            probability = 60.0 + (severity_score / 2.0)
             confidence = 0.85
+        elif severity_score < 100:
+            # Linear for moderate to high: 70 + (score/3)
+            probability = 70.0 + (severity_score / 3.0)
+            confidence = 0.82 + (severity_score / 500.0)
         else:
-            probability = 87
-            confidence = 0.88
+            # Extreme: cap at 95%
+            probability = 95.0
+            confidence = 0.90
 
-        probability = max(0, min(99, int(probability)))
+        probability = max(0.0, min(99.0, probability))
         confidence = max(0.0, min(1.0, confidence))
         
         return probability, confidence
