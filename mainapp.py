@@ -181,7 +181,7 @@ class ImprovedSnowDayCalculator:
         return None
     
     def _get_temperature_fahrenheit(self, period: Dict) -> Optional[float]:
-        """Extract temperature in Fahrenheit."""
+        """Extract temperature in Fahrenheit with safe fallback."""
         temp = period.get('temperature')
         if temp is None:
             return None
@@ -191,7 +191,7 @@ class ImprovedSnowDayCalculator:
         if unit_code == 'C' or unit_code == 'wmoUnit:degC':
             return (temp * 9/5) + 32
         
-        return temp
+        return float(temp) if temp is not None else None
     
     def _extract_wind_chill(self, period: Dict) -> Optional[float]:
         """Extract or calculate wind chill for a period."""
@@ -215,11 +215,18 @@ class ImprovedSnowDayCalculator:
             return 72
         
         first_period = day_hours[0]
-        dt = datetime.fromisoformat(first_period['startTime'])
-        now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+        start_time = first_period.get('startTime')
+        if not start_time:
+            return 72
         
-        hours_ahead = max(0, int((dt - now).total_seconds() / 3600))
-        return hours_ahead
+        try:
+            dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+            
+            hours_ahead = max(0, int((dt - now).total_seconds() / 3600))
+            return hours_ahead
+        except (ValueError, AttributeError):
+            return 72
 
     def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
         """Compute minimum wind chill during bus commute hours (6am-9am)."""
@@ -267,7 +274,15 @@ class ImprovedSnowDayCalculator:
         critical_window_snow = 0.0
         
         for period in day_hours:
-            dt = datetime.fromisoformat(period['startTime'])
+            start_time = period.get('startTime')
+            if not start_time:
+                continue
+            
+            try:
+                dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                continue
+            
             hour = dt.hour
             
             if not self._is_snow_period(period):
@@ -314,7 +329,16 @@ class ImprovedSnowDayCalculator:
         max_consecutive = 0
         
         for period in day_hours:
-            dt = datetime.fromisoformat(period['startTime'])
+            start_time = period.get('startTime')
+            if not start_time:
+                consecutive = 0
+                continue
+            
+            try:
+                dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                consecutive = 0
+                continue
             
             if start_hour <= dt.hour <= end_hour and self._is_snow_period(period):
                 qpf, _ = self._extract_precipitation_data(period)
@@ -536,7 +560,8 @@ class ImprovedSnowDayCalculator:
     
     def _calculate_severity_score(self, day_hours: List[Dict]) -> Dict:
         """Calculate all severity components."""
-        extreme_cold_score = self.analyze_extreme_cold(day_hours, self._compute_min_bus_chill(day_hours))
+        min_bus_chill = self._compute_min_bus_chill(day_hours)
+        extreme_cold_score = self.analyze_extreme_cold(day_hours, min_bus_chill)
         early_morning_score, timing_details = self.analyze_early_morning_timing(day_hours)
         accumulation_score, total_snow = self.analyze_total_accumulation(day_hours)
         refreeze_score, has_refreeze = self.analyze_refreeze_risk(day_hours)
@@ -544,22 +569,17 @@ class ImprovedSnowDayCalculator:
         road_score = self.analyze_road_conditions(day_hours)
         drifting_score = self.analyze_drifting_risk(day_hours)
         alert_type, alert_score = self.analyze_alerts(day_hours)
-        min_bus_chill = self._compute_min_bus_chill(day_hours)
-        
-        # Snow + Cold together (multiply effect when both present)
-        snow_and_cold = early_morning_score + accumulation_score
-        if extreme_cold_score > 0 and snow_and_cold > 0:
-            # Both cold AND snow = major closure factor
-            snow_and_cold *= 1.5
-        
-        base_score = (
-            extreme_cold_score +
-            snow_and_cold +
-            refreeze_score +
-            hazard_score +
-            road_score +
-            drifting_score
-        )
+
+        # Snow-related score
+        snow_score = early_morning_score + accumulation_score
+
+        # Combine snow + cold - boost snow contribution if both present
+        if snow_score > 0 and extreme_cold_score > 0:
+            combined_boost = snow_score * 0.5
+            snow_score += combined_boost
+
+        # Total base score: always include extreme cold, snow, and other hazards
+        base_score = extreme_cold_score + snow_score + refreeze_score + hazard_score + road_score + drifting_score
         
         return {
             'base_score': base_score,
@@ -578,7 +598,7 @@ class ImprovedSnowDayCalculator:
         }
     
     def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[int, float]:
-        """Convert severity score to probability."""
+        """Convert severity score to probability. Calibrated for Michigan closures."""
         if alert_type == 'Blizzard Warning':
             return 88, 0.95
         elif alert_type == 'Ice Storm Warning':
@@ -588,35 +608,40 @@ class ImprovedSnowDayCalculator:
         elif alert_type == 'Winter Weather Advisory':
             return 48, 0.75
         
+        # Adjusted for realistic Michigan closure patterns
         if severity_score < 10:
-            probability = 3
+            probability = 2
             confidence = 0.95
         elif severity_score < 20:
-            probability = 12
-            confidence = 0.90
+            probability = 10
+            confidence = 0.92
         elif severity_score < 30:
-            probability = 22
-            confidence = 0.85
+            probability = 25
+            confidence = 0.88
         elif severity_score < 40:
-            probability = 35
-            confidence = 0.82
+            probability = 40
+            confidence = 0.85
         elif severity_score < 50:
-            probability = 50
-            confidence = 0.80
+            probability = 55
+            confidence = 0.82
         elif severity_score < 60:
-            probability = 62
+            probability = 68
             confidence = 0.82
         elif severity_score < 70:
-            probability = 72
-            confidence = 0.84
+            probability = 76
+            confidence = 0.83
         elif severity_score < 80:
-            probability = 80
-            confidence = 0.86
+            probability = 82
+            confidence = 0.85
         else:
             probability = 87
             confidence = 0.88
         
-        return min(99, probability), confidence
+        # Enforce bounds: probability between 0-99, confidence between 0-1
+        probability = max(0, min(99, int(probability)))
+        confidence = max(0.0, min(1.0, confidence))
+        
+        return probability, confidence
     
     def _generate_plain_english_reason(self, severity: Dict, probability: int) -> str:
         """Generate human-readable explanation."""
