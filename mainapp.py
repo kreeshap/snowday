@@ -25,28 +25,23 @@ class ImprovedSnowDayCalculator:
             'timing_weight': 2.5,
             'name': 'Urban/Conservative (closes early)'
         },
-        'average': {
-            'accumulation_threshold': 4.5,
-            'timing_weight': 2.2,
-            'name': 'Average District'
+        'michigan': {
+            'accumulation_threshold': 3.5,  # Based on Northville (Jan 15, 2026: 3-6" closed)
+            'timing_weight': 2.3,
+            'name': 'Michigan Schools (Northville-calibrated)'
         },
         'tough': {
             'accumulation_threshold': 6.0,
             'timing_weight': 1.8,
             'name': 'Rural/Tough (tolerates more snow)'
-        },
-        'northville': {
-            'accumulation_threshold': 3.5,  # Closes on 3-6" snow + icy roads (Jan 15, 2026)
-            'timing_weight': 2.3,
-            'name': 'Northville Public Schools (Actual)'
         }
     }
     
-    def __init__(self, zipcode: str, district_profile: str = 'average'):
+    def __init__(self, zipcode: str, district_profile: str = 'michigan'):
         self.zipcode = zipcode
         self.district_profile = district_profile
-        self.profile_name = self.DISTRICT_PROFILES.get(district_profile, {}).get('name', 'Average')
-        self.profile = self.DISTRICT_PROFILES.get(district_profile, self.DISTRICT_PROFILES['average'])
+        self.profile_name = self.DISTRICT_PROFILES.get(district_profile, {}).get('name', 'Michigan')
+        self.profile = self.DISTRICT_PROFILES.get(district_profile, self.DISTRICT_PROFILES['michigan'])
         
         self.lat = None
         self.lon = None
@@ -901,13 +896,14 @@ class ImprovedSnowDayCalculator:
         }
 
 
-def get_snow_day_probabilities(zipcode: str, district_profile: str = 'average') -> Dict:
+def get_snow_day_probabilities(zipcode: str, district_profile: str = 'michigan') -> Dict:
     """
-    Get snow day probabilities.
+    Get snow day probabilities for Michigan schools.
     
     Args:
         zipcode: US ZIP code
-        district_profile: 'conservative', 'average', or 'tough'
+        district_profile: 'conservative', 'michigan', or 'tough'
+                         (default 'michigan' is calibrated to Northville/typical MI patterns)
     
     Returns:
         Dict with probabilities for next 4 weekdays
