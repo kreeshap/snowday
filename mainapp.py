@@ -598,7 +598,7 @@ class ImprovedSnowDayCalculator:
         }
     
     def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[int, float]:
-        """Convert severity score to probability, adjusted for extreme-cold-only days."""
+        """Convert severity score to probability, with better cold-only handling."""
         if alert_type == 'Blizzard Warning':
             return 88, 0.95
         elif alert_type == 'Ice Storm Warning':
@@ -608,9 +608,9 @@ class ImprovedSnowDayCalculator:
         elif alert_type == 'Winter Weather Advisory':
             return 48, 0.75
 
-        # Boost for extreme-cold-only days: if severity_score < 40 but extreme cold exists
-        if severity_score < 40 and severity_score > 0:
-            probability = 50 + int(severity_score / 2)  # 50–70% range
+        # Boost cold-only days: brutal wind chill should be 60-75% closure probability
+        if severity_score > 0 and severity_score < 50:
+            probability = 60 + int(severity_score / 2)  # 60–85% range
             confidence = 0.85
         elif severity_score < 10:
             probability = 2
@@ -628,7 +628,7 @@ class ImprovedSnowDayCalculator:
             probability = 55
             confidence = 0.82
         elif severity_score < 60:
-            probability = 68
+            probability = 70
             confidence = 0.82
         elif severity_score < 70:
             probability = 76
