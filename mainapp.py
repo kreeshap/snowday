@@ -238,14 +238,51 @@ class ImprovedSnowDayCalculator:
                 return val
         return None
     
-    def _extract_wind_speed(self, period: Dict) -> Optional[float]:
-        """Extract wind speed in mph."""
-        wind = period.get('windSpeed')
-        if wind:
-            val = self._extract_number(wind)
-            if val:
-                return val
-        return None
+    def _get_temperature_fahrenheit(self, period: Dict) -> Optional[float]:
+        """
+        Extract temperature in Fahrenheit.
+        NWS sometimes returns Celsius; handle both cases.
+        """
+        temp = period.get('temperature')
+        if temp is None:
+            return None
+        
+        unit_code = period.get('temperatureUnit', 'F')
+        
+        # If it's Celsius, convert to Fahrenheit
+        if unit_code == 'C' or unit_code == 'wmoUnit:degC':
+            return (temp * 9/5) + 32
+        
+        return temp
+    
+    def _extract_wind_chill(self, period: Dict) -> Optional[float]:
+        """
+        Extract or calculate wind chill for a period.
+        
+        NWS doesn't always provide windChill directly, so we calculate from
+        temperature and wind speed using the standard formula.
+        
+        Wind Chill = 35.74 + 0.6215T - 35.75(V^0.16) + 0.4275T(V^0.16)
+        Where T = temperature (°F), V = wind speed (mph)
+        
+        Wind chill only applies when T ≤ 50°F and V > 3 mph.
+        """
+        temp = self._get_temperature_fahrenheit(period)
+        wind_speed = self._extract_wind_speed(period)
+        
+        if temp is None or wind_speed is None:
+            return None
+        
+        # Wind chill only defined for T <= 50°F and wind > 3 mph
+        if temp > 50 or wind_speed <= 3:
+            return temp
+        
+        # Calculate using NWS formula
+        import math
+        v_power = math.pow(wind_speed, 0.16)
+        wind_chill = 35.74 + (0.6215 * temp) - (35.75 * v_power) + (0.4275 * temp * v_power)
+        
+        return wind_chill
     
     def _get_forecast_age(self, day_hours: List[Dict]) -> int:
         """Estimate forecast age in hours (impacts confidence)."""
@@ -572,25 +609,96 @@ class ImprovedSnowDayCalculator:
     # Decision logic with confidence
     # -------------------------
     
+    def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
+        """
+        Compute minimum wind chill during bus commute hours (6am-9am).
+        Uses actual NWS wind chill if available, calculates from temp+wind otherwise.
+        
+        Returns the minimum wind chill value (or 32 if no data available).
+        """
+        bus_hour_chills = []
+        
+        for period in day_hours:
+            dt = datetime.fromisoformat(period['startTime'])
+            
+            # Bus commute window: 6am-9am
+            if 6 <= dt.hour <= 9:
+                chill = self._extract_wind_chill(period)
+                if chill is not None:
+                    bus_hour_chills.append(chill)
+        
+        return min(bus_hour_chills) if bus_hour_chills else 32.0
+    
+    def analyze_extreme_cold_day(self, day_hours: List[Dict], min_bus_chill: float) -> float:
+        """
+        Score for pure extreme cold closures (no snow/ice).
+        Only applies when wind chill is dangerously low during bus hours.
+        Capped so it doesn't overwhelm snow/ice events.
+        
+        Returns score (max 25 points)
+        """
+        has_snow_or_ice = any(self._is_snow_period(p) for p in day_hours)
+        
+        # Only apply if there's NO snow/ice
+        if has_snow_or_ice:
+            return 0.0
+        
+        # Pure cold closure only if bus-time wind chill is dangerously low
+        score = 0.0
+        
+        if min_bus_chill <= -25:
+            score = 22
+        elif min_bus_chill <= -20:
+            score = 15
+        elif min_bus_chill <= -15:
+            score = 8
+        
+        return min(score, 25.0)
+    
     def _calculate_severity_score(self, day_hours: List[Dict]) -> Dict:
-        """Calculate all severity components."""
+        """
+        Calculate all severity components and return integrated score.
+        This is the heart of the model - all factors combine here.
+        """
+        # ===== PRECIPITATION & TIMING =====
         early_morning_score, timing_details = self.analyze_early_morning_timing(day_hours)
         accumulation_score, total_snow = self.analyze_total_accumulation(day_hours)
         refreeze_score, has_refreeze = self.analyze_refreeze_risk(day_hours)
         hazard_score = self.analyze_hazardous_precip(day_hours)
+        
+        # ===== ROAD & VISIBILITY CONDITIONS =====
         road_score = self.analyze_road_conditions(day_hours)
         drifting_score = self.analyze_drifting_risk(day_hours)
+        
+        # ===== EXTREME COLD (CRITICAL) =====
+        min_bus_chill = self._compute_min_bus_chill(day_hours)
+        extreme_cold_score = self.analyze_extreme_cold_day(day_hours, min_bus_chill)
+        
+        # Windchill danger score: applies alongside other factors
+        windchill_danger_score = 0.0
+        if min_bus_chill <= -25:
+            windchill_danger_score = 12.0
+        elif min_bus_chill <= -20:
+            windchill_danger_score = 8.0
+        elif min_bus_chill <= -15:
+            windchill_danger_score = 4.0
+        
+        # ===== ALERTS =====
         alert_type, alert_score = self.analyze_alerts(day_hours)
         
+        # ===== COMBINE ALL SCORES =====
         base_score = (
             early_morning_score +
             accumulation_score +
             refreeze_score +
             hazard_score +
             road_score +
-            drifting_score
+            drifting_score +
+            windchill_danger_score +
+            extreme_cold_score
         )
         
+        # ===== RETURN COMPLETE SEVERITY DICT =====
         return {
             'base_score': base_score,
             'alert_type': alert_type,
@@ -599,6 +707,14 @@ class ImprovedSnowDayCalculator:
             'total_snow_inches': round(total_snow, 1),
             'refreeze_risk': round(refreeze_score, 1),
             'hazardous_precip': round(hazard_score, 1),
+            'drifting_risk': round(drifting_score, 1),
+            'windchill_danger': round(windchill_danger_score, 1),
+            'extreme_cold': round(extreme_cold_score, 1),
+            'min_bus_chill': round(min_bus_chill, 0),
+            'road_conditions': round(road_score, 1),
+            'timing_details': timing_details,
+            'has_refreeze': has_refreeze,
+        } round(hazard_score, 1),
             'drifting_risk': round(drifting_score, 1),
             'road_conditions': round(road_score, 1),
             'timing_details': timing_details,
