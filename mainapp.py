@@ -1,4 +1,50 @@
-import requests
+def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
+        """
+        Compute minimum wind chill during bus commute hours (6am-9am).
+        Uses actual NWS wind chill if available, calculates from temp+wind otherwise.
+        
+        Returns the minimum wind chill value (or 32 if no data available).
+        """
+        bus_hour_chills = []
+        
+        for period in day_hours:
+            dt = datetime.fromisoformat(period['startTime'])
+            
+            # Bus commute window: 6am-9am
+            if 6 <= dt.hour <= 9:
+                chill = self._extract_wind_chill(period)
+                if chill is not None:
+                    bus_hour_chills.append(chill)
+        
+        return min(bus_hour_chills) if bus_hour_chills else 32.0
+    
+    def analyze_extreme_cold_day(self, day_hours: List[Dict], min_bus_chill: float) -> float:
+        """
+        Score for pure extreme cold closures (no snow/ice).
+        Only applies when wind chill is dangerously low during bus hours.
+        Capped so it doesn't overwhelm snow/ice events.
+        
+        Returns score (max 25 points)
+        """
+        has_snow_or_ice = any(self._is_snow_period(p) for p in day_hours)
+        
+        # Only apply if there's NO snow/ice
+        # (Wind chill danger is already scored separately if snow present)
+        if has_snow_or_ice:
+            return 0.0
+        
+        # Pure cold closure only if bus-time wind chill is dangerously low
+        score = 0.0
+        
+        if min_bus_chill <= -25:
+            score = 22  # Standalone extreme cold closure
+        elif min_bus_chill <= -20:
+            score = 15
+        elif min_bus_chill <= -15:
+            score = 8
+        
+        # Cap at 25 so pure cold never dominates snow/ice events
+        return min(score, 25.0)import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import re
@@ -577,20 +623,24 @@ class ImprovedSnowDayCalculator:
             return 40, 0.70
         
         # Severity buckets with inherent uncertainty
-        if severity_score < 30:
-            probability = 8
-            confidence = 0.90
-        elif severity_score < 50:
-            probability = 25
+        # Buckets calibrated to real closure patterns
+        if severity_score < 20:
+            probability = 5
+            confidence = 0.92
+        elif severity_score < 40:
+            probability = 15
+            confidence = 0.85
+        elif severity_score < 60:
+            probability = 35
             confidence = 0.75  # Borderline cases are fuzzy
-        elif severity_score < 70:
-            probability = 50
-            confidence = 0.70  # Maximum uncertainty
-        elif severity_score < 90:
-            probability = 70
+        elif severity_score < 80:
+            probability = 60
             confidence = 0.80
+        elif severity_score < 100:
+            probability = 75
+            confidence = 0.85
         else:
-            probability = 85
+            probability = 88
             confidence = 0.90
         
         return min(99, probability), confidence
@@ -601,6 +651,11 @@ class ImprovedSnowDayCalculator:
         
         if severity['alert_type']:
             reasons.append(f"🚨 {severity['alert_type']} in effect")
+        
+        if severity['extreme_cold'] > 0:
+            reasons.append(f"Extreme cold: {int(severity['min_bus_chill'])}°F wind chill during bus hours")
+        elif severity['min_bus_chill'] <= -15:
+            reasons.append(f"Dangerous wind chill: {int(severity['min_bus_chill'])}°F")
         
         if severity['total_snow_inches'] >= self.profile['accumulation_threshold']:
             reasons.append(f"Expected {severity['total_snow_inches']:.1f}\" of snow (threshold: {self.profile['accumulation_threshold']:.1f}\")")
@@ -705,6 +760,9 @@ class ImprovedSnowDayCalculator:
                     'refreeze_risk': severity['refreeze_risk'],
                     'hazardous_precip': severity['hazardous_precip'],
                     'drifting_risk': severity['drifting_risk'],
+                    'windchill_danger': severity['windchill_danger'],
+                    'extreme_cold': severity['extreme_cold'],
+                    'min_bus_hour_chill': int(severity['min_bus_chill']),
                     'road_conditions': severity['road_conditions'],
                     'alert': severity['alert_type'] or 'None',
                     'base_severity_score': round(severity['base_score'], 1),
