@@ -1,4 +1,19 @@
-import requests
+def analyze_cold_with_snow(self, day_hours: List[Dict], min_bus_chill: float, total_snow: float) -> Tuple[float, str]:
+        """Score extreme cold COMBINED with snow/road issues. Triggers earlier than cold alone."""
+        score = 0.0
+        factor_type = "cold_with_snow"
+        
+        # COLD + SNOW combined: lower threshold, higher impact
+        if min_bus_chill <= -15 and total_snow >= 1.0:
+            score = 75
+        elif min_bus_chill <= -10 and total_snow >= 2.0:
+            score = 60
+        elif min_bus_chill <= -5 and total_snow >= 3.0:
+            score = 50
+        elif min_bus_chill <= 0 and total_snow >= 4.0:
+            score = 45
+        
+        return score, factor_typeimport requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import re
@@ -243,30 +258,29 @@ class ImprovedSnowDayCalculator:
         
         return min(bus_hour_chills) if bus_hour_chills else 32.0
     
-    def analyze_extreme_cold(self, day_hours: List[Dict], min_bus_chill: float) -> float:
-        """Score extreme cold. Michigan closes around -18°F wind chill."""
+    def analyze_extreme_cold(self, day_hours: List[Dict], min_bus_chill: float) -> Tuple[float, str]:
+        """Score extreme cold ALONE. -19 to -22°F is closure threshold for cold only."""
         score = 0.0
+        factor_type = "cold_only"
         
-        # -21°F and below = automatic HIGH (95-98%)
-        if min_bus_chill <= -21:
+        # COLD ALONE scoring (-19 to -22°F range is hard closure)
+        if min_bus_chill <= -22:
             score = 95
-        elif min_bus_chill <= -30:
-            score = 90
-        elif min_bus_chill <= -25:
-            score = 85
+        elif min_bus_chill <= -21:
+            score = 92
         elif min_bus_chill <= -20:
-            score = 75
-        elif min_bus_chill <= -18:
-            score = 65
+            score = 88
+        elif min_bus_chill <= -19:
+            score = 85
         elif min_bus_chill <= -15:
-            score = 45
+            score = 50
         elif min_bus_chill <= -10:
-            score = 25
+            score = 30
         
-        return score
+        return score, factor_type
     
     def analyze_early_morning_timing(self, day_hours: List[Dict]) -> Tuple[float, Dict]:
-        """Snow during 5-9am commute window."""
+        """Snow during critical 4-6am bus commute window - highest weight."""
         score = 0.0
         details = {
             'critical_window_snow_depth': 0.0,
@@ -275,6 +289,7 @@ class ImprovedSnowDayCalculator:
         }
         
         critical_window_snow = 0.0
+        peak_commute_snow = 0.0  # 4-6am is MOST critical
         
         for period in day_hours:
             start_time = period.get('startTime')
@@ -298,35 +313,51 @@ class ImprovedSnowDayCalculator:
             period_temp = period.get('temperature', 32)
             snow_depth = self._qpf_to_snow_depth(qpf_amount, period_temp)
             
-            if 5 <= hour <= 9:
-                critical_window_snow += snow_depth
+            # PEAK COMMUTE: 4-6am gets HIGHEST multiplier (2.5x)
+            if 4 <= hour < 6:
+                peak_commute_snow += snow_depth
                 
                 if snow_depth >= 0.4:
-                    score += 30
-                elif snow_depth >= 0.15:
-                    score += 18
+                    score += 50 * 2.5  # Triple weight for peak hours
+                elif snow_depth >= 0.2:
+                    score += 35 * 2.5
+                elif snow_depth >= 0.1:
+                    score += 20 * 2.5
                 else:
-                    score += 8
+                    score += 10 * 2.5
                 
                 if precip_prob and precip_prob > details['peak_probability']:
                     details['peak_probability'] = precip_prob
             
-            elif 3 <= hour < 5:
+            # EARLY COMMUTE: 6-8am (1.5x weight)
+            elif 6 <= hour <= 8:
+                critical_window_snow += snow_depth
+                
+                if snow_depth >= 0.4:
+                    score += 30 * 1.5
+                elif snow_depth >= 0.15:
+                    score += 18 * 1.5
+                else:
+                    score += 8 * 1.5
+            
+            # PRE-COMMUTE: 3-4am (1x weight) - road prep time
+            elif 3 <= hour < 4:
                 if snow_depth >= 0.3:
                     score += 15
                 elif snow_depth > 0:
                     score += 8
         
-        continuous_hours = self._count_continuous_snow_hours(day_hours, 5, 9)
-        if continuous_hours >= 3:
-            score += 12
+        # Bonus for continuous snow during peak hours
+        continuous_hours = self._count_continuous_snow_hours(day_hours, 4, 6)
+        if continuous_hours >= 2:
+            score += 40
         
-        details['critical_window_snow_depth'] = round(critical_window_snow, 2)
+        details['critical_window_snow_depth'] = round(peak_commute_snow, 2)
         details['continuous_hours'] = continuous_hours
         
         return score * self.profile['timing_weight'], details
     
-    def _count_continuous_snow_hours(self, day_hours: List[Dict], start_hour: int, end_hour: int) -> int:
+    def _count_continuous_snow_hours(self, day_hours: List[Dict], start_hour: int, end_hour: int) -> float:
         """Count consecutive hours of snow in a window."""
         consecutive = 0
         max_consecutive = 0
@@ -356,7 +387,7 @@ class ImprovedSnowDayCalculator:
         return max_consecutive
     
     def analyze_total_accumulation(self, day_hours: List[Dict]) -> Tuple[float, float]:
-        """Total snow depth - Michigan threshold ~3 inches."""
+        """Total snow depth - Michigan threshold discussion starts at 3-4 inches."""
         total_snow = 0.0
         
         for period in day_hours:
@@ -371,18 +402,23 @@ class ImprovedSnowDayCalculator:
         
         score = 0.0
         
+        # Refined thresholds based on Michigan closure patterns
         if total_snow >= 6.0:
             score = 50
         elif total_snow >= 5.0:
             score = 45
+        elif total_snow >= 4.5:
+            score = 42
         elif total_snow >= 4.0:
             score = 38
+        elif total_snow >= 3.5:
+            score = 28
         elif total_snow >= 3.0:
-            score = 30
+            score = 20
         elif total_snow >= 2.0:
-            score = 18
+            score = 12
         elif total_snow >= 1.0:
-            score = 8
+            score = 6
         
         return score, total_snow
     
@@ -423,16 +459,21 @@ class ImprovedSnowDayCalculator:
         return score, has_refreeze_risk
     
     def analyze_road_conditions(self, day_hours: List[Dict]) -> float:
-        """Road safety based on temperature and visibility."""
+        """Road safety - PRIMARY factor for closure decisions per Michigan sources."""
         score = 0.0
         temps = []
         visibilities = []
+        has_snow = False
         
         for period in day_hours:
             dt = datetime.fromisoformat(period['startTime'])
             
-            if 6 <= dt.hour <= 18:
+            # Focus on critical morning hours: 4am-10am
+            if 4 <= dt.hour <= 10:
                 temps.append(period.get('temperature', 32))
+                
+                if self._is_snow_period(period):
+                    has_snow = True
                 
                 vis = self._extract_visibility(period)
                 if vis:
@@ -444,27 +485,31 @@ class ImprovedSnowDayCalculator:
         avg_temp = sum(temps) / len(temps)
         min_temp = min(temps)
         
+        # Road condition scoring - MAJOR FACTOR
         if avg_temp < 15:
-            score += 15
+            score += 35  # Very cold roads
         elif avg_temp < 25:
-            score += 10
+            score += 25  # Cold roads, hard to clear
         elif avg_temp < 32:
-            score += 5
+            score += 15  # Near freezing, slick potential
         
-        if min_temp < 32:
-            score += 5
+        if min_temp < 20:
+            score += 20
         
-        has_snow = any(self._is_snow_period(p) for p in day_hours)
-        if has_snow and visibilities:
-            min_vis = min(visibilities)
-            if min_vis < 0.25:
-                score += 15
-            elif min_vis < 0.5:
-                score += 10
-            elif min_vis < 1.0:
-                score += 6
+        # ACTIVE SNOW = WORST ROAD CONDITIONS
+        if has_snow:
+            score += 30  # Snow actively falling during morning
+            
+            if visibilities:
+                min_vis = min(visibilities)
+                if min_vis < 0.25:
+                    score += 40  # Near whiteout conditions
+                elif min_vis < 0.5:
+                    score += 30  # Heavy snow, poor visibility
+                elif min_vis < 1.0:
+                    score += 20  # Moderate snow impact
         
-        return score
+        return min(score, 100.0)
     
     def analyze_drifting_risk(self, day_hours: List[Dict]) -> float:
         """Wind + snow = drifting."""
@@ -497,7 +542,7 @@ class ImprovedSnowDayCalculator:
         return min(score, 20.0)
     
     def analyze_hazardous_precip(self, day_hours: List[Dict]) -> float:
-        """Freezing rain, sleet, ice."""
+        """Freezing rain, sleet, ice - MAJOR independent closure triggers."""
         score = 0.0
         
         for period in day_hours:
@@ -506,15 +551,15 @@ class ImprovedSnowDayCalculator:
             combined = f"{desc} {detailed}"
             
             if 'freezing rain' in combined:
-                score += 50
+                score += 70  # Increased from 50
             elif 'ice storm' in combined:
-                score += 48
+                score += 75  # Increased from 48
             elif 'sleet' in combined or 'ice pellets' in combined:
-                score += 35
+                score += 60  # Increased from 35
             elif 'freezing drizzle' in combined:
-                score += 20
+                score += 35  # Increased from 20
         
-        return min(score, 50.0)
+        return min(score, 75.0)
     
     def analyze_alerts(self, day_hours: List[Dict]) -> Tuple[Optional[str], float]:
         """Apply alerts only during decision window (3am-10am)."""
@@ -736,15 +781,18 @@ class ImprovedSnowDayCalculator:
                 'confidence': round(confidence, 2),
                 'reason': reason,
                 'score_breakdown': {
-                    'extreme_cold': round(severity['extreme_cold'], 2),
-                    'early_morning_timing': round(severity['early_morning'], 2),
-                    'total_snow_inches': round(severity['total_snow_inches'], 2),
-                    'accumulation_score': round(severity['accumulation'], 2),
-                    'refreeze_risk': round(severity['refreeze_risk'], 2),
-                    'hazardous_precip': round(severity['hazardous_precip'], 2),
-                    'drifting_risk': round(severity['drifting_risk'], 2),
-                    'min_bus_hour_chill': round(severity['min_bus_chill'], 2),
-                    'road_conditions': round(severity['road_conditions'], 2),
+                    'pathway_used': severity['pathway_used'],
+                    'cold_alone_score': severity['cold_alone_score'],
+                    'snow_road_alone_score': round(severity['snow_road_alone_score'], 2),
+                    'cold_snow_road_combined_score': severity['cold_snow_road_score'],
+                    'early_morning_timing': severity['early_morning'],
+                    'total_snow_inches': severity['total_snow_inches'],
+                    'accumulation_score': severity['accumulation'],
+                    'refreeze_risk': severity['refreeze_risk'],
+                    'hazardous_precip': severity['hazardous_precip'],
+                    'drifting_risk': severity['drifting_risk'],
+                    'min_bus_hour_chill': severity['min_bus_chill'],
+                    'road_conditions': severity['road_conditions'],
                     'alert': severity['alert_type'] or 'None',
                     'base_severity_score': round(severity['base_score'], 2),
                 },
