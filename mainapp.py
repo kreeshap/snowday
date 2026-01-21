@@ -246,19 +246,21 @@ class ImprovedSnowDayCalculator:
         """Score extreme cold. Michigan closes around -18°F wind chill."""
         score = 0.0
         
-        # -18°F is closure threshold for Michigan
-        if min_bus_chill <= -30:
-            score = 50
+        # -21°F and below = automatic HIGH (95-98%)
+        if min_bus_chill <= -21:
+            score = 95
+        elif min_bus_chill <= -30:
+            score = 90
         elif min_bus_chill <= -25:
-            score = 45
+            score = 85
         elif min_bus_chill <= -20:
-            score = 40
+            score = 75
         elif min_bus_chill <= -18:
-            score = 35
+            score = 65
         elif min_bus_chill <= -15:
-            score = 25
+            score = 45
         elif min_bus_chill <= -10:
-            score = 15
+            score = 25
         
         return score
     
@@ -600,17 +602,16 @@ class ImprovedSnowDayCalculator:
     def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[float, float]:
         """Convert severity score to probability, smooth mapping without rounding."""
         if alert_type == 'Blizzard Warning':
-            return 88.0, 0.95
+            return 96.0, 0.95
         elif alert_type == 'Ice Storm Warning':
-            return 85.0, 0.93
+            return 93.0, 0.93
         elif alert_type == 'Winter Storm Warning':
-            return 72.0, 0.88
+            return 82.0, 0.88
         elif alert_type == 'Winter Weather Advisory':
-            return 48.0, 0.75
+            return 58.0, 0.75
 
         # Smooth probability curve based on severity score
-        # Cold-only days (0-50): 60-85% range
-        # Mixed/snow days (50-100): 70-95% range
+        # Extreme cold (-21°F+) now triggers 95-98%
         if severity_score <= 0:
             probability = 2.0
             confidence = 0.95
@@ -618,14 +619,18 @@ class ImprovedSnowDayCalculator:
             # Linear boost for cold/light snow: 60 + (score/2)
             probability = 60.0 + (severity_score / 2.0)
             confidence = 0.85
-        elif severity_score < 100:
+        elif severity_score < 95:
             # Linear for moderate to high: 70 + (score/3)
             probability = 70.0 + (severity_score / 3.0)
             confidence = 0.82 + (severity_score / 500.0)
+        elif severity_score < 100:
+            # High extreme cold zone (95-100 score) = 95-98%
+            probability = 95.0 + ((severity_score - 95) * 0.6)
+            confidence = 0.92
         else:
-            # Extreme: cap at 95%
-            probability = 95.0
-            confidence = 0.90
+            # Extreme: cap at 99%
+            probability = 99.0
+            confidence = 0.95
 
         probability = max(0.0, min(99.0, probability))
         confidence = max(0.0, min(1.0, confidence))
