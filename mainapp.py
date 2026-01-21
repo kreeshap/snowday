@@ -1,4 +1,249 @@
-def analyze_cold_with_snow(self, day_hours: List[Dict], min_bus_chill: float, total_snow: float) -> Tuple[float, str]:
+import requests
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
+import re
+import math
+
+class ImprovedSnowDayCalculator:
+    """
+    Production-grade Snow Day Calculator using NWS Gridpoint Data.
+    Calibrated for Michigan schools based on actual closure patterns.
+    """
+    
+    DISTRICT_PROFILES = {
+        'michigan': {
+            'accumulation_threshold': 3.0,
+            'timing_weight': 2.0,
+            'name': 'Michigan Schools'
+        },
+        'conservative': {
+            'accumulation_threshold': 2.5,
+            'timing_weight': 2.5,
+            'name': 'Conservative (closes early)'
+        },
+        'tough': {
+            'accumulation_threshold': 5.0,
+            'timing_weight': 1.5,
+            'name': 'Tough (tolerates more)'
+        }
+    }
+    
+    def __init__(self, zipcode: str, district_profile: str = 'michigan'):
+        self.zipcode = zipcode
+        self.district_profile = district_profile
+        self.profile_name = self.DISTRICT_PROFILES.get(district_profile, {}).get('name', 'Michigan')
+        self.profile = self.DISTRICT_PROFILES.get(district_profile, self.DISTRICT_PROFILES['michigan'])
+        
+        self.lat = None
+        self.lon = None
+        self.location_name = None
+        self.base_url = "https://api.weather.gov"
+        self.headers = {
+            'User-Agent': '(SnowDayCalculator, github.com)',
+            'Accept': 'application/json'
+        }
+        self.hourly_forecast = None
+        self.alerts = None
+        self.error_message = None
+
+    def get_coordinates_from_zip(self) -> bool:
+        url = f"https://api.zippopotam.us/us/{self.zipcode}"
+        try:
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                self.lat = float(data['places'][0]['latitude'])
+                self.lon = float(data['places'][0]['longitude'])
+                self.location_name = f"{data['places'][0]['place name']}, {data['places'][0]['state abbreviation']}"
+                return True
+            else:
+                self.error_message = f"Invalid ZIP code: {self.zipcode}"
+                return False
+        except Exception as e:
+            self.error_message = f"Failed to geocode ZIP code: {str(e)}"
+            return False
+    
+    def get_location_metadata(self) -> Optional[Dict]:
+        try:
+            url = f"{self.base_url}/points/{self.lat},{self.lon}"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code != 200:
+                self.error_message = "Failed to get location metadata"
+                return None
+            return response.json()['properties']
+        except Exception as e:
+            self.error_message = f"Error fetching location metadata: {str(e)}"
+            return None
+    
+    def fetch_weather_data(self) -> bool:
+        """Fetch hourly forecast and alerts from NWS."""
+        try:
+            if not self.get_coordinates_from_zip():
+                return False
+            
+            metadata = self.get_location_metadata()
+            if not metadata:
+                return False
+            
+            hourly_url = metadata['forecastHourly']
+            alerts_url = f"{self.base_url}/alerts/active?point={self.lat},{self.lon}"
+            
+            hourly_response = requests.get(hourly_url, headers=self.headers, timeout=15)
+            if hourly_response.status_code == 200:
+                self.hourly_forecast = hourly_response.json()['properties']['periods']
+            else:
+                self.error_message = "Failed to fetch hourly forecast"
+                return False
+            
+            alerts_response = requests.get(alerts_url, headers=self.headers, timeout=15)
+            if alerts_response.status_code == 200:
+                self.alerts = alerts_response.json()['features']
+            
+            return True
+        except Exception as e:
+            self.error_message = f"Error fetching weather data: {str(e)}"
+            return False
+
+    def _extract_number(self, s: Optional[str]) -> Optional[float]:
+        """Extract numeric value from formatted strings."""
+        if not s:
+            return None
+        try:
+            match = re.search(r'(\d+(?:\.\d+)?)', str(s))
+            if match:
+                return float(match.group(1))
+        except (ValueError, AttributeError):
+            pass
+        return None
+    
+    def _extract_precipitation_data(self, period: Dict) -> Tuple[Optional[float], Optional[int]]:
+        """Extract QPF (liquid equivalent, inches) and probability."""
+        try:
+            qpf_amount = None
+            if 'quantitativePrecipitation' in period and period['quantitativePrecipitation']:
+                precip_val = period['quantitativePrecipitation'].get('value')
+                if precip_val is not None:
+                    qpf_amount = precip_val / 25.4
+            
+            precip_prob = None
+            if 'precipitationProbability' in period and period['precipitationProbability']:
+                precip_prob = period['precipitationProbability'].get('value')
+            
+            return qpf_amount, precip_prob
+        except Exception:
+            return None, None
+    
+    def _is_snow_period(self, period: Dict) -> bool:
+        """Determine if period contains snow/wintry precip."""
+        desc = period.get('shortForecast', '').lower()
+        detailed = period.get('detailedForecast', '').lower()
+        icon = period.get('icon', '').lower()
+        
+        snow_keywords = ['snow', 'blizzard', 'sleet', 'freezing rain', 'ice', 'wintry']
+        combined_text = f"{desc} {detailed} {icon}"
+        
+        return any(keyword in combined_text for keyword in snow_keywords)
+    
+    def _qpf_to_snow_depth(self, qpf_inches: float, period_temp: float) -> float:
+        """Convert QPF to snow depth using period-specific temperature."""
+        if qpf_inches <= 0:
+            return 0.0
+        
+        if period_temp > 30:
+            ratio = 8.0
+        elif period_temp > 25:
+            ratio = 9.5
+        elif period_temp > 20:
+            ratio = 10.0
+        elif period_temp > 15:
+            ratio = 12.0
+        else:
+            ratio = 15.0
+        
+        return qpf_inches * ratio
+    
+    def _extract_visibility(self, period: Dict) -> Optional[float]:
+        """Extract visibility in miles."""
+        vis = period.get('visibility')
+        if vis:
+            val = self._extract_number(vis)
+            if val:
+                return val
+        return None
+    
+    def _extract_wind_speed(self, period: Dict) -> Optional[float]:
+        """Extract wind speed in mph."""
+        wind = period.get('windSpeed')
+        if wind:
+            val = self._extract_number(wind)
+            if val:
+                return val
+        return None
+    
+    def _get_temperature_fahrenheit(self, period: Dict) -> Optional[float]:
+        """Extract temperature in Fahrenheit with safe fallback."""
+        temp = period.get('temperature')
+        if temp is None:
+            return None
+        
+        unit_code = period.get('temperatureUnit', 'F')
+        
+        if unit_code == 'C' or unit_code == 'wmoUnit:degC':
+            return (temp * 9/5) + 32
+        
+        return float(temp) if temp is not None else None
+    
+    def _extract_wind_chill(self, period: Dict) -> Optional[float]:
+        """Extract or calculate wind chill for a period."""
+        temp = self._get_temperature_fahrenheit(period)
+        wind_speed = self._extract_wind_speed(period)
+        
+        if temp is None or wind_speed is None:
+            return None
+        
+        if temp > 50 or wind_speed <= 3:
+            return temp
+        
+        v_power = math.pow(wind_speed, 0.16)
+        wind_chill = 35.74 + (0.6215 * temp) - (35.75 * v_power) + (0.4275 * temp * v_power)
+        
+        return wind_chill
+    
+    def _get_forecast_age(self, day_hours: List[Dict]) -> int:
+        """Estimate forecast age in hours."""
+        if not day_hours:
+            return 72
+        
+        first_period = day_hours[0]
+        start_time = first_period.get('startTime')
+        if not start_time:
+            return 72
+        
+        try:
+            dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+            
+            hours_ahead = max(0, int((dt - now).total_seconds() / 3600))
+            return hours_ahead
+        except (ValueError, AttributeError):
+            return 72
+
+    def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
+        """Compute minimum wind chill during extended bus window (6:30am-4:00pm)."""
+        bus_hour_chills = []
+        
+        for period in day_hours:
+            dt = datetime.fromisoformat(period['startTime'])
+            
+            # Check if time is within 6:30am to 4:00pm (16:00)
+            if (dt.hour == 6 and dt.minute >= 30) or (6 < dt.hour < 16) or (dt.hour == 16 and dt.minute == 0):
+                chill = self._extract_wind_chill(period)
+                if chill is not None:
+                    bus_hour_chills.append(chill)
+        
+        return min(bus_hour_chills) if bus_hour_chills else 32.0
+    
+    def analyze_cold_with_snow(self, day_hours: List[Dict], min_bus_chill: float, total_snow: float) -> Tuple[float, str]:
         """Score extreme cold COMBINED with snow/road issues. Triggers earlier than cold alone."""
         score = 0.0
         factor_type = "cold_with_snow"
