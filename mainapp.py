@@ -229,13 +229,14 @@ class ImprovedSnowDayCalculator:
             return 72
 
     def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
-        """Compute minimum wind chill during bus commute hours (6am-9am)."""
+        """Compute minimum wind chill during extended bus window (6:30am-4:00pm)."""
         bus_hour_chills = []
         
         for period in day_hours:
             dt = datetime.fromisoformat(period['startTime'])
             
-            if 6 <= dt.hour <= 9:
+            # Check if time is within 6:30am to 4:00pm (16:00)
+            if (dt.hour == 6 and dt.minute >= 30) or (6 < dt.hour < 16) or (dt.hour == 16 and dt.minute == 0):
                 chill = self._extract_wind_chill(period)
                 if chill is not None:
                     bus_hour_chills.append(chill)
@@ -320,7 +321,7 @@ class ImprovedSnowDayCalculator:
         if continuous_hours >= 3:
             score += 12
         
-        details['critical_window_snow_depth'] = round(critical_window_snow, 1)
+        details['critical_window_snow_depth'] = round(critical_window_snow, 2)
         details['continuous_hours'] = continuous_hours
         
         return score * self.profile['timing_weight'], details
@@ -584,17 +585,17 @@ class ImprovedSnowDayCalculator:
         base_score = extreme_cold_score + snow_score + refreeze_score + hazard_score + road_score + drifting_score
         
         return {
-            'base_score': base_score,
+            'base_score': round(base_score, 2),
             'alert_type': alert_type,
-            'extreme_cold': round(extreme_cold_score, 1),
-            'early_morning': round(early_morning_score, 1),
-            'accumulation': round(accumulation_score, 1),
-            'total_snow_inches': round(total_snow, 1),
-            'refreeze_risk': round(refreeze_score, 1),
-            'hazardous_precip': round(hazard_score, 1),
-            'drifting_risk': round(drifting_score, 1),
-            'min_bus_chill': round(min_bus_chill, 0),
-            'road_conditions': round(road_score, 1),
+            'extreme_cold': round(extreme_cold_score, 2),
+            'early_morning': round(early_morning_score, 2),
+            'accumulation': round(accumulation_score, 2),
+            'total_snow_inches': round(total_snow, 2),
+            'refreeze_risk': round(refreeze_score, 2),
+            'hazardous_precip': round(hazard_score, 2),
+            'drifting_risk': round(drifting_score, 2),
+            'min_bus_chill': round(min_bus_chill, 2),
+            'road_conditions': round(road_score, 2),
             'timing_details': timing_details,
             'has_refreeze': has_refreeze,
         }
@@ -730,22 +731,22 @@ class ImprovedSnowDayCalculator:
             results.append({
                 'date': day_date.strftime('%Y-%m-%d'),
                 'weekday': day_date.strftime('%A'),
-                'probability': probability,
+                'probability': round(probability, 2),
                 'likelihood': likelihood,
                 'confidence': round(confidence, 2),
                 'reason': reason,
                 'score_breakdown': {
-                    'extreme_cold': severity['extreme_cold'],
-                    'early_morning_timing': severity['early_morning'],
-                    'total_snow_inches': severity['total_snow_inches'],
-                    'accumulation_score': severity['accumulation'],
-                    'refreeze_risk': severity['refreeze_risk'],
-                    'hazardous_precip': severity['hazardous_precip'],
-                    'drifting_risk': severity['drifting_risk'],
-                    'min_bus_hour_chill': int(severity['min_bus_chill']),
-                    'road_conditions': severity['road_conditions'],
+                    'extreme_cold': round(severity['extreme_cold'], 2),
+                    'early_morning_timing': round(severity['early_morning'], 2),
+                    'total_snow_inches': round(severity['total_snow_inches'], 2),
+                    'accumulation_score': round(severity['accumulation'], 2),
+                    'refreeze_risk': round(severity['refreeze_risk'], 2),
+                    'hazardous_precip': round(severity['hazardous_precip'], 2),
+                    'drifting_risk': round(severity['drifting_risk'], 2),
+                    'min_bus_hour_chill': round(severity['min_bus_chill'], 2),
+                    'road_conditions': round(severity['road_conditions'], 2),
                     'alert': severity['alert_type'] or 'None',
-                    'base_severity_score': round(severity['base_score'], 1),
+                    'base_severity_score': round(severity['base_score'], 2),
                 },
                 'note': 'Michigan school closure estimate'
             })
