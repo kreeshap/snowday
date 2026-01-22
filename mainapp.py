@@ -243,22 +243,18 @@ class ImprovedSnowDayCalculator:
         return min(bus_hour_chills) if bus_hour_chills else 32.0
     
     def analyze_extreme_cold(self, day_hours: List[Dict], min_bus_chill: float) -> Tuple[float, str]:
-        """Score extreme cold ALONE. -19 to -22°F is closure threshold for cold only."""
+        """Score extreme cold ALONE. Only significant below -18°F."""
         score = 0.0
         factor_type = "cold_only"
         
         if min_bus_chill <= -22:
-            score = 95
-        elif min_bus_chill <= -21:
-            score = 92
-        elif min_bus_chill <= -20:
-            score = 88
-        elif min_bus_chill <= -19:
-            score = 85
-        elif min_bus_chill <= -15:
             score = 50
-        elif min_bus_chill <= -10:
-            score = 30
+        elif min_bus_chill <= -20:
+            score = 40
+        elif min_bus_chill <= -18:
+            score = 25
+        else:
+            score = 0
         
         return score, factor_type
     
@@ -379,21 +375,21 @@ class ImprovedSnowDayCalculator:
         score = 0.0
         
         if total_snow >= 6.0:
-            score = 50
+            score = 25
         elif total_snow >= 5.0:
-            score = 45
+            score = 22
         elif total_snow >= 4.5:
-            score = 42
-        elif total_snow >= 4.0:
-            score = 38
-        elif total_snow >= 3.5:
-            score = 28
-        elif total_snow >= 3.0:
             score = 20
+        elif total_snow >= 4.0:
+            score = 18
+        elif total_snow >= 3.5:
+            score = 14
+        elif total_snow >= 3.0:
+            score = 10
         elif total_snow >= 2.0:
-            score = 12
-        elif total_snow >= 1.0:
             score = 6
+        elif total_snow >= 1.0:
+            score = 3
         
         return score, total_snow
     
@@ -459,28 +455,28 @@ class ImprovedSnowDayCalculator:
         min_temp = min(temps)
         
         if avg_temp < 15:
-            score += 35
-        elif avg_temp < 25:
-            score += 25
-        elif avg_temp < 32:
             score += 15
+        elif avg_temp < 25:
+            score += 12
+        elif avg_temp < 32:
+            score += 8
         
         if min_temp < 20:
-            score += 20
+            score += 10
         
         if has_snow:
-            score += 30
+            score += 15
             
             if visibilities:
                 min_vis = min(visibilities)
                 if min_vis < 0.25:
-                    score += 40
-                elif min_vis < 0.5:
-                    score += 30
-                elif min_vis < 1.0:
                     score += 20
+                elif min_vis < 0.5:
+                    score += 15
+                elif min_vis < 1.0:
+                    score += 10
         
-        return min(score, 100.0)
+        return min(score, 60.0)
     
     def analyze_drifting_risk(self, day_hours: List[Dict]) -> float:
         """Wind + snow = drifting."""
@@ -612,33 +608,40 @@ class ImprovedSnowDayCalculator:
         }
     
     def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[float, float]:
-        """Convert severity score to probability, smooth mapping without rounding."""
+        """Convert severity score to probability, realistic mapping."""
         if alert_type == 'Blizzard Warning':
-            return 96.0, 0.95
+            return 85.0, 0.95
         elif alert_type == 'Ice Storm Warning':
-            return 93.0, 0.93
+            return 80.0, 0.93
         elif alert_type == 'Winter Storm Warning':
-            return 82.0, 0.88
+            return 65.0, 0.88
         elif alert_type == 'Winter Weather Advisory':
-            return 58.0, 0.75
+            return 40.0, 0.75
 
+        # Much more conservative mapping
         if severity_score <= 0:
             probability = 2.0
-            confidence = 0.95
-        elif severity_score < 50:
-            probability = 60.0 + (severity_score / 2.0)
-            confidence = 0.85
-        elif severity_score < 95:
-            probability = 70.0 + (severity_score / 3.0)
-            confidence = 0.82 + (severity_score / 500.0)
+            confidence = 0.70
+        elif severity_score < 20:
+            probability = 5.0 + (severity_score / 4.0)
+            confidence = 0.60
+        elif severity_score < 40:
+            probability = 15.0 + (severity_score / 6.0)
+            confidence = 0.65
+        elif severity_score < 60:
+            probability = 25.0 + (severity_score / 8.0)
+            confidence = 0.70
+        elif severity_score < 80:
+            probability = 35.0 + (severity_score / 10.0)
+            confidence = 0.75
         elif severity_score < 100:
-            probability = 95.0 + ((severity_score - 95) * 0.6)
-            confidence = 0.92
+            probability = 45.0 + (severity_score / 12.0)
+            confidence = 0.80
         else:
-            probability = 99.0
-            confidence = 0.95
+            probability = 65.0
+            confidence = 0.85
 
-        probability = max(0.0, min(99.0, probability))
+        probability = max(0.0, min(90.0, probability))
         confidence = max(0.0, min(1.0, confidence))
         
         return probability, confidence
