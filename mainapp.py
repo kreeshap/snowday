@@ -1,7 +1,7 @@
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-import requests
+import re
 import math
 
 class mainapp:
