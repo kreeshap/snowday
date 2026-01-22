@@ -10,7 +10,7 @@ class mainapp:
         'michigan': {
             'accumulation_threshold': 3.0,
             'timing_weight': 2.0,
-            'cold_threshold': -18,  # Wind chill for cold closures (actual MI threshold)
+            'cold_threshold': -17,  # Wind chill for cold closures (actual MI threshold)
             'name': 'Michigan Schools'
         },
         'conservative': {
@@ -642,7 +642,7 @@ class mainapp:
                     pass
         return highest_alert, highest_score
         
-                    
+        
     
     def _calculate_severity_score(self, day_hours: List[Dict]) -> Dict:
         min_bus_chill = self._compute_min_bus_chill(day_hours)
