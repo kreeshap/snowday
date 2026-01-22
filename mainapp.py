@@ -233,7 +233,7 @@ class mainapp:
             dt = datetime.fromisoformat(period['startTime'])
             
             # Morning bus time (6-9am) and afternoon (2-4pm)
-            if (6 <= dt.hour < 9) or (14 <= dt.hour < 16):
+            if 4 <= dt.hour < 10:
                 chill = self._extract_wind_chill(period)
                 if chill is not None:
                     bus_hour_chills.append(chill)
