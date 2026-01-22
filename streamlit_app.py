@@ -1,5 +1,5 @@
 import streamlit as st
-from mainapp import get_snow_day_probabilities  # updated function name
+from mainapp import calculate_next_weekday_probabilities  # updated function name
 
 st.set_page_config(page_title="Snow Day Calculator")
 
@@ -13,7 +13,7 @@ if st.button("calculate", type="primary"):
         st.error("for the love of god enter a real zip code")
     else:
         with st.spinner("cookin up"):
-            result = get_snow_day_probabilities(zipcode)
+            result = calculate_next_weekday_probabilities(zipcode)
         
         if result['success']:
             st.success(f"yo im done cookin up {result['location']}")
