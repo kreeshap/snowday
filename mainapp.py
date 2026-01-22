@@ -5,14 +5,6 @@ import requests
 import math
 
 class mainapp:
-    """
-    Enhanced Snow Day Calculator with improved accuracy.
-    Key improvements:
-    - Better severity-to-probability mapping based on actual closure patterns
-    - More realistic confidence intervals
-    - Improved timing weights for critical decision windows
-    - Better handling of compound weather factors
-    """
     
     DISTRICT_PROFILES = {
         'michigan': {
@@ -83,7 +75,6 @@ class mainapp:
             return None
     
     def fetch_weather_data(self) -> bool:
-        """Fetch hourly forecast and alerts from NWS."""
         try:
             if not self.get_coordinates_from_zip():
                 return False
@@ -112,7 +103,6 @@ class mainapp:
             return False
 
     def _extract_number(self, s: Optional[str]) -> Optional[float]:
-        """Extract numeric value from formatted strings."""
         if not s:
             return None
         try:
@@ -124,7 +114,6 @@ class mainapp:
         return None
     
     def _extract_precipitation_data(self, period: Dict) -> Tuple[Optional[float], Optional[int]]:
-        """Extract QPF (liquid equivalent, inches) and probability."""
         try:
             qpf_amount = None
             if 'quantitativePrecipitation' in period and period['quantitativePrecipitation']:
@@ -141,7 +130,6 @@ class mainapp:
             return None, None
     
     def _is_snow_period(self, period: Dict) -> bool:
-        """Determine if period contains snow/wintry precip."""
         desc = period.get('shortForecast', '').lower()
         detailed = period.get('detailedForecast', '').lower()
         icon = period.get('icon', '').lower()
@@ -152,7 +140,6 @@ class mainapp:
         return any(keyword in combined_text for keyword in snow_keywords)
     
     def _qpf_to_snow_depth(self, qpf_inches: float, period_temp: float) -> float:
-        """Convert QPF to snow depth using temperature-based snow-to-liquid ratio."""
         if qpf_inches <= 0:
             return 0.0
         
@@ -175,7 +162,6 @@ class mainapp:
         return qpf_inches * ratio
     
     def _extract_visibility(self, period: Dict) -> Optional[float]:
-        """Extract visibility in miles."""
         vis = period.get('visibility')
         if vis:
             val = self._extract_number(vis.get('value') if isinstance(vis, dict) else vis)
@@ -187,7 +173,6 @@ class mainapp:
         return None
     
     def _extract_wind_speed(self, period: Dict) -> Optional[float]:
-        """Extract wind speed in mph."""
         wind = period.get('windSpeed')
         if wind:
             val = self._extract_number(wind)
@@ -196,7 +181,6 @@ class mainapp:
         return None
     
     def _get_temperature_fahrenheit(self, period: Dict) -> Optional[float]:
-        """Extract temperature in Fahrenheit with safe fallback."""
         temp = period.get('temperature')
         if temp is None:
             return None
@@ -209,7 +193,6 @@ class mainapp:
         return float(temp) if temp is not None else None
     
     def _extract_wind_chill(self, period: Dict) -> Optional[float]:
-        """Extract or calculate wind chill for a period."""
         temp = self._get_temperature_fahrenheit(period)
         wind_speed = self._extract_wind_speed(period)
         
@@ -226,7 +209,6 @@ class mainapp:
         return wind_chill
     
     def _get_forecast_age(self, day_hours: List[Dict]) -> int:
-        """Estimate forecast age in hours."""
         if not day_hours:
             return 72
         
@@ -245,7 +227,6 @@ class mainapp:
             return 72
 
     def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
-        """Compute minimum wind chill during bus hours (6am-9am and 2pm-4pm)."""
         bus_hour_chills = []
         
         for period in day_hours:
@@ -260,11 +241,6 @@ class mainapp:
         return min(bus_hour_chills) if bus_hour_chills else 32.0
     
     def analyze_extreme_cold(self, day_hours: List[Dict], min_bus_chill: float) -> Tuple[float, str]:
-        """
-        IMPROVED: Accurate cold closure thresholds.
-        Michigan schools close when wind chill drops below -19°F to -22°F.
-        This is based on actual district policies and historical closures.
-        """
         score = 0.0
         factor_type = "cold_only"
         
@@ -287,10 +263,6 @@ class mainapp:
         return score, factor_type
     
     def analyze_early_morning_timing(self, day_hours: List[Dict]) -> Tuple[float, Dict]:
-        """
-        IMPROVED: Focused on 5am-8am window when road crews struggle.
-        Reduced over-weighting of minor snow amounts.
-        """
         score = 0.0
         details = {
             'critical_window_snow_depth': 0.0,
@@ -369,7 +341,6 @@ class mainapp:
         return score * self.profile['timing_weight'], details
     
     def _count_continuous_snow_hours(self, day_hours: List[Dict], start_hour: int, end_hour: int) -> float:
-        """Count consecutive hours of meaningful snow in a window."""
         consecutive = 0
         max_consecutive = 0
         
@@ -400,10 +371,6 @@ class mainapp:
         return max_consecutive
     
     def analyze_total_accumulation(self, day_hours: List[Dict]) -> Tuple[float, float]:
-        """
-        IMPROVED: More realistic accumulation scoring.
-        Michigan schools rarely close for <4" unless other factors present.
-        """
         total_snow = 0.0
         
         for period in day_hours:
@@ -441,9 +408,6 @@ class mainapp:
         return score, total_snow
     
     def analyze_refreeze_risk(self, day_hours: List[Dict]) -> Tuple[float, bool]:
-        """
-        IMPROVED: Better detection of dangerous refreeze conditions.
-        """
         score = 0.0
         has_refreeze_risk = False
         last_snow_hour = None
@@ -488,10 +452,6 @@ class mainapp:
         return score, has_refreeze_risk
     
     def analyze_road_conditions(self, day_hours: List[Dict]) -> float:
-        """
-        IMPROVED: More nuanced road condition assessment.
-        Primary factor in most closure decisions.
-        """
         score = 0.0
         morning_temps = []
         visibilities = []
@@ -555,9 +515,6 @@ class mainapp:
         return min(score, 70.0)
     
     def analyze_drifting_risk(self, day_hours: List[Dict]) -> float:
-        """
-        IMPROVED: Better drifting assessment based on wind + fresh snow.
-        """
         score = 0.0
         has_recent_snow = False
         last_snow_hour = None
@@ -603,9 +560,6 @@ class mainapp:
         return min(score, 25.0)
     
     def analyze_hazardous_precip(self, day_hours: List[Dict]) -> float:
-        """
-        IMPROVED: Freezing rain/ice are near-automatic closures.
-        """
         score = 0.0
         
         for period in day_hours:
@@ -637,10 +591,6 @@ class mainapp:
         return score
     
     def analyze_alerts(self, day_hours: List[Dict]) -> Tuple[Optional[str], float]:
-        """
-        IMPROVED: Alerts are strong indicators but not guarantees.
-        Apply during decision window (3am-10am).
-        """
         if not self.alerts:
             return None, 0.0
         
@@ -694,9 +644,6 @@ class mainapp:
         return highest_alert, highest_score
     
     def _calculate_severity_score(self, day_hours: List[Dict]) -> Dict:
-        """
-        IMPROVED: Calculate all severity components with better balance.
-        """
         min_bus_chill = self._compute_min_bus_chill(day_hours)
         extreme_cold_score, _ = self.analyze_extreme_cold(day_hours, min_bus_chill)
         early_morning_score, timing_details = self.analyze_early_morning_timing(day_hours)
@@ -745,10 +692,6 @@ class mainapp:
         }
     
     def _severity_to_probability(self, severity_score: float, alert_type: Optional[str]) -> Tuple[float, float]:
-        """
-        IMPROVED: Much more realistic probability mapping.
-        Based on analysis of actual school closure patterns.
-        """
         
         # Alert-based probabilities (still strong indicators but not guarantees)
         if alert_type == 'Blizzard Warning':
@@ -812,7 +755,6 @@ class mainapp:
         return probability, confidence
     
     def _generate_plain_english_reason(self, severity: Dict, probability: float) -> str:
-        """Generate human-readable explanation."""
         reasons = []
         
         if severity['alert_type']:
