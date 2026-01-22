@@ -235,267 +235,6 @@ class ImprovedSnowDayCalculator:
         for period in day_hours:
             dt = datetime.fromisoformat(period['startTime'])
             
-            # Check if time is within 6:30am to 4:00pm (16:00)
-            if (dt.hour == 6 and dt.minute >= 30) or (6 < dt.hour < 16) or (dt.hour == 16 and dt.minute == 0):
-                chill = self._extract_wind_chill(period)
-                if chill is not None:
-                    bus_hour_chills.append(chill)
-        
-        return min(bus_hour_chills) if bus_hour_chills else 32.0
-    
-    def analyze_cold_with_snow(self, day_hours: List[Dict], min_bus_chill: float, total_snow: float) -> Tuple[float, str]:
-        """Score extreme cold COMBINED with snow/road issues. Triggers earlier than cold alone."""
-        score = 0.0
-        factor_type = "cold_with_snow"
-        
-        # COLD + SNOW combined: lower threshold, higher impact
-        if min_bus_chill <= -15 and total_snow >= 1.0:
-            score = 75
-        elif min_bus_chill <= -10 and total_snow >= 2.0:
-            score = 60
-        elif min_bus_chill <= -5 and total_snow >= 3.0:
-            score = 50
-        elif min_bus_chill <= 0 and total_snow >= 4.0:
-            score = 45
-        
-        return score, factor_typeimport requests
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-import re
-import math
-
-class ImprovedSnowDayCalculator:
-    """
-    Production-grade Snow Day Calculator using NWS Gridpoint Data.
-    Calibrated for Michigan schools based on actual closure patterns.
-    """
-    
-    DISTRICT_PROFILES = {
-        'michigan': {
-            'accumulation_threshold': 3.0,
-            'timing_weight': 2.0,
-            'name': 'Michigan Schools'
-        },
-        'conservative': {
-            'accumulation_threshold': 2.5,
-            'timing_weight': 2.5,
-            'name': 'Conservative (closes early)'
-        },
-        'tough': {
-            'accumulation_threshold': 5.0,
-            'timing_weight': 1.5,
-            'name': 'Tough (tolerates more)'
-        }
-    }
-    
-    def __init__(self, zipcode: str, district_profile: str = 'michigan'):
-        self.zipcode = zipcode
-        self.district_profile = district_profile
-        self.profile_name = self.DISTRICT_PROFILES.get(district_profile, {}).get('name', 'Michigan')
-        self.profile = self.DISTRICT_PROFILES.get(district_profile, self.DISTRICT_PROFILES['michigan'])
-        
-        self.lat = None
-        self.lon = None
-        self.location_name = None
-        self.base_url = "https://api.weather.gov"
-        self.headers = {
-            'User-Agent': '(SnowDayCalculator, github.com)',
-            'Accept': 'application/json'
-        }
-        self.hourly_forecast = None
-        self.alerts = None
-        self.error_message = None
-
-    def get_coordinates_from_zip(self) -> bool:
-        url = f"https://api.zippopotam.us/us/{self.zipcode}"
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                self.lat = float(data['places'][0]['latitude'])
-                self.lon = float(data['places'][0]['longitude'])
-                self.location_name = f"{data['places'][0]['place name']}, {data['places'][0]['state abbreviation']}"
-                return True
-            else:
-                self.error_message = f"Invalid ZIP code: {self.zipcode}"
-                return False
-        except Exception as e:
-            self.error_message = f"Failed to geocode ZIP code: {str(e)}"
-            return False
-    
-    def get_location_metadata(self) -> Optional[Dict]:
-        try:
-            url = f"{self.base_url}/points/{self.lat},{self.lon}"
-            response = requests.get(url, headers=self.headers, timeout=10)
-            if response.status_code != 200:
-                self.error_message = "Failed to get location metadata"
-                return None
-            return response.json()['properties']
-        except Exception as e:
-            self.error_message = f"Error fetching location metadata: {str(e)}"
-            return None
-    
-    def fetch_weather_data(self) -> bool:
-        """Fetch hourly forecast and alerts from NWS."""
-        try:
-            if not self.get_coordinates_from_zip():
-                return False
-            
-            metadata = self.get_location_metadata()
-            if not metadata:
-                return False
-            
-            hourly_url = metadata['forecastHourly']
-            alerts_url = f"{self.base_url}/alerts/active?point={self.lat},{self.lon}"
-            
-            hourly_response = requests.get(hourly_url, headers=self.headers, timeout=15)
-            if hourly_response.status_code == 200:
-                self.hourly_forecast = hourly_response.json()['properties']['periods']
-            else:
-                self.error_message = "Failed to fetch hourly forecast"
-                return False
-            
-            alerts_response = requests.get(alerts_url, headers=self.headers, timeout=15)
-            if alerts_response.status_code == 200:
-                self.alerts = alerts_response.json()['features']
-            
-            return True
-        except Exception as e:
-            self.error_message = f"Error fetching weather data: {str(e)}"
-            return False
-
-    def _extract_number(self, s: Optional[str]) -> Optional[float]:
-        """Extract numeric value from formatted strings."""
-        if not s:
-            return None
-        try:
-            match = re.search(r'(\d+(?:\.\d+)?)', str(s))
-            if match:
-                return float(match.group(1))
-        except (ValueError, AttributeError):
-            pass
-        return None
-    
-    def _extract_precipitation_data(self, period: Dict) -> Tuple[Optional[float], Optional[int]]:
-        """Extract QPF (liquid equivalent, inches) and probability."""
-        try:
-            qpf_amount = None
-            if 'quantitativePrecipitation' in period and period['quantitativePrecipitation']:
-                precip_val = period['quantitativePrecipitation'].get('value')
-                if precip_val is not None:
-                    qpf_amount = precip_val / 25.4
-            
-            precip_prob = None
-            if 'precipitationProbability' in period and period['precipitationProbability']:
-                precip_prob = period['precipitationProbability'].get('value')
-            
-            return qpf_amount, precip_prob
-        except Exception:
-            return None, None
-    
-    def _is_snow_period(self, period: Dict) -> bool:
-        """Determine if period contains snow/wintry precip."""
-        desc = period.get('shortForecast', '').lower()
-        detailed = period.get('detailedForecast', '').lower()
-        icon = period.get('icon', '').lower()
-        
-        snow_keywords = ['snow', 'blizzard', 'sleet', 'freezing rain', 'ice', 'wintry']
-        combined_text = f"{desc} {detailed} {icon}"
-        
-        return any(keyword in combined_text for keyword in snow_keywords)
-    
-    def _qpf_to_snow_depth(self, qpf_inches: float, period_temp: float) -> float:
-        """Convert QPF to snow depth using period-specific temperature."""
-        if qpf_inches <= 0:
-            return 0.0
-        
-        if period_temp > 30:
-            ratio = 8.0
-        elif period_temp > 25:
-            ratio = 9.5
-        elif period_temp > 20:
-            ratio = 10.0
-        elif period_temp > 15:
-            ratio = 12.0
-        else:
-            ratio = 15.0
-        
-        return qpf_inches * ratio
-    
-    def _extract_visibility(self, period: Dict) -> Optional[float]:
-        """Extract visibility in miles."""
-        vis = period.get('visibility')
-        if vis:
-            val = self._extract_number(vis)
-            if val:
-                return val
-        return None
-    
-    def _extract_wind_speed(self, period: Dict) -> Optional[float]:
-        """Extract wind speed in mph."""
-        wind = period.get('windSpeed')
-        if wind:
-            val = self._extract_number(wind)
-            if val:
-                return val
-        return None
-    
-    def _get_temperature_fahrenheit(self, period: Dict) -> Optional[float]:
-        """Extract temperature in Fahrenheit with safe fallback."""
-        temp = period.get('temperature')
-        if temp is None:
-            return None
-        
-        unit_code = period.get('temperatureUnit', 'F')
-        
-        if unit_code == 'C' or unit_code == 'wmoUnit:degC':
-            return (temp * 9/5) + 32
-        
-        return float(temp) if temp is not None else None
-    
-    def _extract_wind_chill(self, period: Dict) -> Optional[float]:
-        """Extract or calculate wind chill for a period."""
-        temp = self._get_temperature_fahrenheit(period)
-        wind_speed = self._extract_wind_speed(period)
-        
-        if temp is None or wind_speed is None:
-            return None
-        
-        if temp > 50 or wind_speed <= 3:
-            return temp
-        
-        v_power = math.pow(wind_speed, 0.16)
-        wind_chill = 35.74 + (0.6215 * temp) - (35.75 * v_power) + (0.4275 * temp * v_power)
-        
-        return wind_chill
-    
-    def _get_forecast_age(self, day_hours: List[Dict]) -> int:
-        """Estimate forecast age in hours."""
-        if not day_hours:
-            return 72
-        
-        first_period = day_hours[0]
-        start_time = first_period.get('startTime')
-        if not start_time:
-            return 72
-        
-        try:
-            dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
-            now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
-            
-            hours_ahead = max(0, int((dt - now).total_seconds() / 3600))
-            return hours_ahead
-        except (ValueError, AttributeError):
-            return 72
-
-    def _compute_min_bus_chill(self, day_hours: List[Dict]) -> float:
-        """Compute minimum wind chill during extended bus window (6:30am-4:00pm)."""
-        bus_hour_chills = []
-        
-        for period in day_hours:
-            dt = datetime.fromisoformat(period['startTime'])
-            
-            # Check if time is within 6:30am to 4:00pm (16:00)
             if (dt.hour == 6 and dt.minute >= 30) or (6 < dt.hour < 16) or (dt.hour == 16 and dt.minute == 0):
                 chill = self._extract_wind_chill(period)
                 if chill is not None:
@@ -508,7 +247,6 @@ class ImprovedSnowDayCalculator:
         score = 0.0
         factor_type = "cold_only"
         
-        # COLD ALONE scoring (-19 to -22°F range is hard closure)
         if min_bus_chill <= -22:
             score = 95
         elif min_bus_chill <= -21:
@@ -533,8 +271,7 @@ class ImprovedSnowDayCalculator:
             'continuous_hours': 0,
         }
         
-        critical_window_snow = 0.0
-        peak_commute_snow = 0.0  # 4-6am is MOST critical
+        peak_commute_snow = 0.0
         
         for period in day_hours:
             start_time = period.get('startTime')
@@ -558,12 +295,11 @@ class ImprovedSnowDayCalculator:
             period_temp = period.get('temperature', 32)
             snow_depth = self._qpf_to_snow_depth(qpf_amount, period_temp)
             
-            # PEAK COMMUTE: 4-6am gets HIGHEST multiplier (2.5x)
             if 4 <= hour < 6:
                 peak_commute_snow += snow_depth
                 
                 if snow_depth >= 0.4:
-                    score += 50 * 2.5  # Triple weight for peak hours
+                    score += 50 * 2.5
                 elif snow_depth >= 0.2:
                     score += 35 * 2.5
                 elif snow_depth >= 0.1:
@@ -574,10 +310,7 @@ class ImprovedSnowDayCalculator:
                 if precip_prob and precip_prob > details['peak_probability']:
                     details['peak_probability'] = precip_prob
             
-            # EARLY COMMUTE: 6-8am (1.5x weight)
             elif 6 <= hour <= 8:
-                critical_window_snow += snow_depth
-                
                 if snow_depth >= 0.4:
                     score += 30 * 1.5
                 elif snow_depth >= 0.15:
@@ -585,14 +318,12 @@ class ImprovedSnowDayCalculator:
                 else:
                     score += 8 * 1.5
             
-            # PRE-COMMUTE: 3-4am (1x weight) - road prep time
             elif 3 <= hour < 4:
                 if snow_depth >= 0.3:
                     score += 15
                 elif snow_depth > 0:
                     score += 8
         
-        # Bonus for continuous snow during peak hours
         continuous_hours = self._count_continuous_snow_hours(day_hours, 4, 6)
         if continuous_hours >= 2:
             score += 40
@@ -647,7 +378,6 @@ class ImprovedSnowDayCalculator:
         
         score = 0.0
         
-        # Refined thresholds based on Michigan closure patterns
         if total_snow >= 6.0:
             score = 50
         elif total_snow >= 5.0:
@@ -671,7 +401,6 @@ class ImprovedSnowDayCalculator:
         """Detect icy roads from refreeze."""
         score = 0.0
         has_refreeze_risk = False
-        
         last_snow_hour = None
         
         for period in day_hours:
@@ -713,7 +442,6 @@ class ImprovedSnowDayCalculator:
         for period in day_hours:
             dt = datetime.fromisoformat(period['startTime'])
             
-            # Focus on critical morning hours: 4am-10am
             if 4 <= dt.hour <= 10:
                 temps.append(period.get('temperature', 32))
                 
@@ -730,36 +458,33 @@ class ImprovedSnowDayCalculator:
         avg_temp = sum(temps) / len(temps)
         min_temp = min(temps)
         
-        # Road condition scoring - MAJOR FACTOR
         if avg_temp < 15:
-            score += 35  # Very cold roads
+            score += 35
         elif avg_temp < 25:
-            score += 25  # Cold roads, hard to clear
+            score += 25
         elif avg_temp < 32:
-            score += 15  # Near freezing, slick potential
+            score += 15
         
         if min_temp < 20:
             score += 20
         
-        # ACTIVE SNOW = WORST ROAD CONDITIONS
         if has_snow:
-            score += 30  # Snow actively falling during morning
+            score += 30
             
             if visibilities:
                 min_vis = min(visibilities)
                 if min_vis < 0.25:
-                    score += 40  # Near whiteout conditions
+                    score += 40
                 elif min_vis < 0.5:
-                    score += 30  # Heavy snow, poor visibility
+                    score += 30
                 elif min_vis < 1.0:
-                    score += 20  # Moderate snow impact
+                    score += 20
         
         return min(score, 100.0)
     
     def analyze_drifting_risk(self, day_hours: List[Dict]) -> float:
         """Wind + snow = drifting."""
         score = 0.0
-        
         has_recent_snow = False
         last_snow_hour = None
         
@@ -796,13 +521,13 @@ class ImprovedSnowDayCalculator:
             combined = f"{desc} {detailed}"
             
             if 'freezing rain' in combined:
-                score += 70  # Increased from 50
+                score += 70
             elif 'ice storm' in combined:
-                score += 75  # Increased from 48
+                score += 75
             elif 'sleet' in combined or 'ice pellets' in combined:
-                score += 60  # Increased from 35
+                score += 60
             elif 'freezing drizzle' in combined:
-                score += 35  # Increased from 20
+                score += 35
         
         return min(score, 75.0)
     
@@ -816,7 +541,6 @@ class ImprovedSnowDayCalculator:
         
         for alert in self.alerts:
             event = alert['properties'].get('event', '')
-            
             effective_str = alert['properties'].get('effective')
             expires_str = alert['properties'].get('expires')
             
@@ -854,7 +578,7 @@ class ImprovedSnowDayCalculator:
     def _calculate_severity_score(self, day_hours: List[Dict]) -> Dict:
         """Calculate all severity components."""
         min_bus_chill = self._compute_min_bus_chill(day_hours)
-        extreme_cold_score = self.analyze_extreme_cold(day_hours, min_bus_chill)
+        extreme_cold_score, _ = self.analyze_extreme_cold(day_hours, min_bus_chill)
         early_morning_score, timing_details = self.analyze_early_morning_timing(day_hours)
         accumulation_score, total_snow = self.analyze_total_accumulation(day_hours)
         refreeze_score, has_refreeze = self.analyze_refreeze_risk(day_hours)
@@ -863,15 +587,12 @@ class ImprovedSnowDayCalculator:
         drifting_score = self.analyze_drifting_risk(day_hours)
         alert_type, alert_score = self.analyze_alerts(day_hours)
 
-        # Snow-related score
         snow_score = early_morning_score + accumulation_score
 
-        # Combine snow + cold - boost snow contribution if both present
         if snow_score > 0 and extreme_cold_score > 0:
             combined_boost = snow_score * 0.5
             snow_score += combined_boost
 
-        # Total base score: always include extreme cold, snow, and other hazards
         base_score = extreme_cold_score + snow_score + refreeze_score + hazard_score + road_score + drifting_score
         
         return {
@@ -901,25 +622,19 @@ class ImprovedSnowDayCalculator:
         elif alert_type == 'Winter Weather Advisory':
             return 58.0, 0.75
 
-        # Smooth probability curve based on severity score
-        # Extreme cold (-21°F+) now triggers 95-98%
         if severity_score <= 0:
             probability = 2.0
             confidence = 0.95
         elif severity_score < 50:
-            # Linear boost for cold/light snow: 60 + (score/2)
             probability = 60.0 + (severity_score / 2.0)
             confidence = 0.85
         elif severity_score < 95:
-            # Linear for moderate to high: 70 + (score/3)
             probability = 70.0 + (severity_score / 3.0)
             confidence = 0.82 + (severity_score / 500.0)
         elif severity_score < 100:
-            # High extreme cold zone (95-100 score) = 95-98%
             probability = 95.0 + ((severity_score - 95) * 0.6)
             confidence = 0.92
         else:
-            # Extreme: cap at 99%
             probability = 99.0
             confidence = 0.95
 
@@ -993,7 +708,6 @@ class ImprovedSnowDayCalculator:
                 continue
             
             day_hours = periods_by_date[day_date]
-            
             severity = self._calculate_severity_score(day_hours)
             probability, confidence = self._severity_to_probability(severity['base_score'], severity['alert_type'])
             forecast_age = self._get_forecast_age(day_hours)
@@ -1025,11 +739,8 @@ class ImprovedSnowDayCalculator:
                 'likelihood': likelihood,
                 'confidence': round(confidence, 2),
                 'reason': reason,
-                'score_breakdown': {
-                    'pathway_used': severity['pathway_used'],
-                    'cold_alone_score': severity['cold_alone_score'],
-                    'snow_road_alone_score': round(severity['snow_road_alone_score'], 2),
-                    'cold_snow_road_combined_score': severity['cold_snow_road_score'],
+                'severity_breakdown': {
+                    'extreme_cold': severity['extreme_cold'],
                     'early_morning_timing': severity['early_morning'],
                     'total_snow_inches': severity['total_snow_inches'],
                     'accumulation_score': severity['accumulation'],
@@ -1039,7 +750,7 @@ class ImprovedSnowDayCalculator:
                     'min_bus_hour_chill': severity['min_bus_chill'],
                     'road_conditions': severity['road_conditions'],
                     'alert': severity['alert_type'] or 'None',
-                    'base_severity_score': round(severity['base_score'], 2),
+                    'base_severity_score': severity['base_score'],
                 },
                 'note': 'Michigan school closure estimate'
             })
