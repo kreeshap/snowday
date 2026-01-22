@@ -25,5 +25,15 @@ if st.button("calculate", type="primary"):
                 st.markdown(f"### {day['weekday']} ({day['date']})")
                 st.markdown(f"**Probability:** {day['probability']}%")
                 st.markdown(f"**Likelihood:** {day['likelihood']}")
+                # DEBUG INFO - ADD THIS
+                st.markdown("---")
+                st.markdown("**🔍 DEBUG INFO:**")
+                st.markdown(f"- Min Bus Chill: **{day['severity_breakdown']['min_bus_chill_f']:.1f}°F**")
+                st.markdown(f"- Cold Contribution: **{day['severity_breakdown']['extreme_cold_contribution']}**")
+                st.markdown(f"- Total Severity: **{day['severity_breakdown']['total_severity_score']}**")
+                st.markdown(f"- Snow: {day['severity_breakdown']['total_snow_inches']:.1f}\"")
+                st.markdown(f"- Alert: {day['severity_breakdown']['alert']}")
+                st.markdown("---")
+
         else:
             st.error(f"Error: {result['error']}")
