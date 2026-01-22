@@ -10,7 +10,7 @@ class mainapp:
         'michigan': {
             'accumulation_threshold': 3.0,
             'timing_weight': 2.0,
-            'cold_threshold': -19,  # Wind chill for cold closures (actual MI threshold)
+            'cold_threshold': -18,  # Wind chill for cold closures (actual MI threshold)
             'name': 'Michigan Schools'
         },
         'conservative': {
