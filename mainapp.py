@@ -595,57 +595,54 @@ class mainapp:
         if not self.alerts:
             return None, 0.0
     
-    highest_alert = None
-    highest_score = 0.0
+        highest_alert = None
+        highest_score = 0.0
     
-    for alert in self.alerts:
-        event = alert['properties'].get('event', '')
-        effective_str = alert['properties'].get('effective')
-        expires_str = alert['properties'].get('expires')
+        for alert in self.alerts:
+            event = alert['properties'].get('event', '')
+            effective_str = alert['properties'].get('effective')
+            expires_str = alert['properties'].get('expires')
         
-        if effective_str and expires_str:
-            try:
-                effective = datetime.fromisoformat(effective_str.replace('Z', '+00:00'))
-                expires = datetime.fromisoformat(expires_str.replace('Z', '+00:00'))
+            if effective_str and expires_str:
+                try:
+                    effective = datetime.fromisoformat(effective_str.replace('Z', '+00:00'))
+                    expires = datetime.fromisoformat(expires_str.replace('Z', '+00:00'))
                 
-                day_start = datetime.fromisoformat(day_hours[0]['startTime'])
-                decision_window_start = day_start.replace(hour=3, minute=0, second=0)
-                decision_window_end = day_start.replace(hour=10, minute=0, second=0)
+                    day_start = datetime.fromisoformat(day_hours[0]['startTime'])
+                    decision_window_start = day_start.replace(hour=3, minute=0, second=0)
+                    decision_window_end = day_start.replace(hour=10, minute=0, second=0)
                 
-                # FIXED: Check if alert overlaps decision window
-                # Alert counts if it's active anytime between 3am-10am
-                if effective < decision_window_end and expires > decision_window_start:
+                    if effective < decision_window_end and expires > decision_window_start:
                     # Adjusted scores - alerts don't guarantee closures
-                    if 'Blizzard Warning' in event:
-                        if highest_score < 60:
-                            highest_alert = 'Blizzard Warning'
-                            highest_score = 60.0
-                    elif 'Ice Storm Warning' in event:
-                        if highest_score < 65:
-                            highest_alert = 'Ice Storm Warning'
-                            highest_score = 65.0
-                    elif 'Winter Storm Warning' in event:
-                        if highest_score < 45:
-                            highest_alert = 'Winter Storm Warning'
-                            highest_score = 45.0
-                    elif 'Winter Weather Advisory' in event:
-                        if highest_score < 15:
-                            highest_alert = 'Winter Weather Advisory'
-                            highest_score = 15.0
-                    elif 'Wind Chill Warning' in event:
-                        if highest_score < 35:
-                            highest_alert = 'Wind Chill Warning'
-                            highest_score = 35.0
-                    elif 'Wind Chill Advisory' in event:
-                        if highest_score < 12:
-                            highest_alert = 'Wind Chill Advisory'
-                            highest_score = 12.0
-            except ValueError:
-                pass
-    
-    return highest_alert, highest_score
-        
+                        if 'Blizzard Warning' in event:
+                            if highest_score < 60:
+                                highest_alert = 'Blizzard Warning'
+                                highest_score = 60.0
+                        elif 'Ice Storm Warning' in event:
+                            if highest_score < 65:
+                                highest_alert = 'Ice Storm Warning'
+                                highest_score = 65.0
+                        elif 'Winter Storm Warning' in event:
+                            if highest_score < 45:
+                                highest_alert = 'Winter Storm Warning'
+                                highest_score = 45.0
+                        elif 'Winter Weather Advisory' in event:
+                            if highest_score < 15:
+                                highest_alert = 'Winter Weather Advisory'
+                                highest_score = 15.0
+                        elif 'Wind Chill Warning' in event:
+                            if highest_score < 35:
+                                highest_alert = 'Wind Chill Warning'
+                                highest_score = 35.0
+                        elif 'Wind Chill Advisory' in event:
+                            if highest_score < 12:
+                                highest_alert = 'Wind Chill Advisory'
+                                highest_score = 12.0
+                except ValueError:
+                    pass
         return highest_alert, highest_score
+        
+                    
     
     def _calculate_severity_score(self, day_hours: List[Dict]) -> Dict:
         min_bus_chill = self._compute_min_bus_chill(day_hours)
