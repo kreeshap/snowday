@@ -961,7 +961,7 @@ class mainapp:
 # Example usage
 if __name__ == "__main__":
     # Test with a Michigan ZIP code
-    calculator = ImprovedSnowDayCalculator("48374", district_profile='michigan')
+    calculator = mainapp("48374", district_profile='michigan')
     results = calculator.calculate_next_weekday_probabilities()
     
     if results['success']:
