@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 import re
 import math
 
-class ImprovedSnowDayCalculator:
+class mainapp_pyr:
     """
     Enhanced Snow Day Calculator with improved accuracy.
     Key improvements:
